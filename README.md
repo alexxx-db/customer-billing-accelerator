@@ -63,11 +63,8 @@ Follow the notebooks in **numerical order** for a smooth end-to-end experience:
 - **Fully governed**: Unity Catalog integration for tool and model registration.
 - **Deployable UI**: Lightweight Dash app included for real-world usage and demoing.
 
-<p style="text-align:center;">
-  <img src="./images/chatbot.jpg"
-       alt="Billing Assistant Interface"
-       width="600"
-       style="display:block; margin:0 auto;" />
+<p align="center">
+  <img src="./images/chatbot.jpg" alt="Billing Assistant Diagram" width="600"/>
 </p>
 
 ---

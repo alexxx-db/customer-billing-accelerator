@@ -16,7 +16,7 @@ The aim is to help telco providers scale customer service operations with an AI-
 Designed as a human-in-the-loop solution, it empowers customer service agents to resolve billing queries faster and more accurately, improving CX and reducing call centre load.
 
 <p align="center">
-  <img src="./images/billing_assistant.drawio.png" alt="Billing Assistant Diagram" width="600"/>
+  <img src="./images/billing_assistant.jpg" alt="Billing Assistant Diagram" width="600"/>
 </p>
 
 

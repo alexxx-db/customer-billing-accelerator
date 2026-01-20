@@ -49,6 +49,10 @@
 
 # COMMAND ----------
 
+# MAGIC %run ./000-config
+
+# COMMAND ----------
+
 catalog = config['catalog']
 db = config['database']
 
@@ -95,6 +99,28 @@ warehouse_id=config['warehouse_id']
 
 # COMMAND ----------
 
+dbutils.fs.mkdirs("dbfs:/Users/alex.barreto@entrada.ai/cme/telco-billing-customer-care/notebooks/data/")
+
+# 1. Define the destination path
+path = "dbfs:/Users/alex.barreto@entrada.ai/cme/telco-billing-customer-care/notebooks/data/billing_plans.json"
+
+# 2. Define the content as a single string
+json_data = """{"Plan_key":1,"Plan_id":"PLAN001","Plan_name":"50GB SIM12","contract_in_months":12,"monthly_charges_dollars":25,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"50","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
+{"Plan_key":2,"Plan_id":"PLAN002","Plan_name":"50GB SIM24","contract_in_months":24,"monthly_charges_dollars":22,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"50","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
+{"Plan_key":3,"Plan_id":"PLAN003","Plan_name":"100GB SIM12","contract_in_months":12,"monthly_charges_dollars":28,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"100","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
+{"Plan_key":4,"Plan_id":"PLAN004","Plan_name":"100GB SIM24","contract_in_months":24,"monthly_charges_dollars":26,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"100","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
+{"Plan_key":5,"Plan_id":"PLAN005","Plan_name":"150GB SIM12","contract_in_months":12,"monthly_charges_dollars":30,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"150","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
+{"Plan_key":6,"Plan_id":"PLAN006","Plan_name":"150GB SIM24","contract_in_months":24,"monthly_charges_dollars":27,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"150","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
+{"Plan_key":7,"Plan_id":"PLAN007","Plan_name":"UNLIMITED SIM12","contract_in_months":12,"monthly_charges_dollars":35,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"UNLIMITED","Data_Limit_GB":"UNLIMITED","Data_Outside_Allowance_Per_MB":0.0,"Roam_Data_charges_per_MB":0.08,"Roam_Call_charges_per_min":0.8,"Roam_text_charges":0.5,"International_call_charge_per_min":0.6,"International_text_charge":0.4}
+{"Plan_key":8,"Plan_id":"PLAN008","Plan_name":"UNLIMITED SIM24","contract_in_months":24,"monthly_charges_dollars":32,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"UNLIMITED","Data_Limit_GB":"UNLIMITED","Data_Outside_Allowance_Per_MB":0.0,"Roam_Data_charges_per_MB":0.08,"Roam_Call_charges_per_min":0.8,"Roam_text_charges":0.5,"International_call_charge_per_min":0.6,"International_text_charge":0.4}
+{"Plan_key":9,"Plan_id":"PLAN009","Plan_name":"UNLIMITED WORLD SIM12","contract_in_months":12,"monthly_charges_dollars":42,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"UNLIMITED","Data_Limit_GB":"UNLIMITED","Data_Outside_Allowance_Per_MB":0.0,"Roam_Data_charges_per_MB":0.0,"Roam_Call_charges_per_min":0.0,"Roam_text_charges":0.0,"International_call_charge_per_min":0.0,"International_text_charge":0.0}
+{"Plan_key":10,"Plan_id":"PLAN010","Plan_name":"UNLIMITED WORLD SIM24","contract_in_months":24,"monthly_charges_dollars":38,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"UNLIMITED","Data_Limit_GB":"UNLIMITED","Data_Outside_Allowance_Per_MB":0.0,"Roam_Data_charges_per_MB":0.0,"Roam_Call_charges_per_min":0.0,"Roam_text_charges":0.0,"International_call_charge_per_min":0.0,"International_text_charge":0.0}"""
+
+# 3. Write to DBFS (True allows overwriting if the file already exists)
+dbutils.fs.put(path, json_data, True)
+
+# COMMAND ----------
+
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, DecimalType
 
 # Define the schema for the JSON data
@@ -118,10 +144,10 @@ schema = StructType([
 # Get the billing dataset path and import the data into a delta table with the specified schema
 current_workspace_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
 data_dir_path = "/".join(current_workspace_path.split("/")[:-1]) + "/data"
-df_plans = spark.read.format("json").schema(schema).load("file:/Workspace/" + data_dir_path + "/billing_plans.json")
+df_plans = spark.read.format("json").schema(schema).load("dbfs:" + data_dir_path + "/billing_plans.json")
 
 # Write the DataFrame to a Delta table
-df_plans.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{catalog}.{db}.billing_plans")
+# df_plans.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{catalog}.{db}.billing_plans")
 
 # COMMAND ----------
 
@@ -139,6 +165,10 @@ display(df_plans)
 # MAGIC
 # MAGIC Device is used as the the foreign key. For more details around the data generation, please refer Databricks Labs project.
 # MAGIC
+
+# COMMAND ----------
+
+# MAGIC %pip install dbldatagen
 
 # COMMAND ----------
 
@@ -447,4 +477,5 @@ with open('config.yml', "w") as f:
     f.write(content)
 
 # COMMAND ----------
+
 

@@ -20,7 +20,7 @@ if 'config' not in locals():
 # Catalog and database
 # Change the Catalog and database name as per your requirements
 
-config['catalog'] = 'telco_billing_catalog'
+config['catalog'] = 'cme_demos_alex_barreto'
 config['database'] = 'telco_billing_db'
 
 # COMMAND ----------

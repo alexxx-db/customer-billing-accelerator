@@ -38,7 +38,6 @@ config = ModelConfig(development_config="config.yaml").to_dict()
 ############################################
 # Define your LLM endpoint and system prompt
 ############################################
-# LLM_ENDPOINT_NAME = LLM_ENDPOINT
 llm = ChatDatabricks(endpoint=config['llm_endpoint'])
 system_prompt = config['agent_prompt']
 

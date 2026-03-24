@@ -72,6 +72,7 @@ print(f"Created view {catalog}.{db}.invoice_analytics (PII columns excluded)")
 # COMMAND ----------
 
 # DBTITLE 1,Create or Update Genie Space
+import requests
 from databricks.sdk import WorkspaceClient
 
 w = WorkspaceClient()
@@ -82,40 +83,47 @@ table_identifiers = config['genie_space_tables']
 warehouse_id = config['warehouse_id']
 sample_questions = config['genie_space_sample_questions']
 
+api_base = f"{w.config.host}/api/2.0"
+headers = {"Authorization": f"Bearer {w.config.token}"}
+
 # Check if a Genie Space with this name already exists
 existing_space_id = None
 try:
-    spaces = w.genie.list_spaces()
-    for space in spaces:
-        if space.title == space_name:
-            existing_space_id = space.space_id
+    resp = requests.get(f"{api_base}/genie/spaces", headers=headers)
+    resp.raise_for_status()
+    for space in resp.json().get("spaces", []):
+        if space.get("title") == space_name:
+            existing_space_id = space["space_id"]
             print(f"Found existing Genie Space '{space_name}' with ID: {existing_space_id}")
             break
 except Exception as e:
     print(f"Could not list existing spaces: {e}. Will create a new one.")
 
+space_payload = {
+    "title": space_name,
+    "description": space_description,
+    "table_identifiers": table_identifiers,
+    "warehouse_id": warehouse_id,
+    "sample_questions": sample_questions,
+}
+
 if existing_space_id:
-    # Update the existing space
-    genie_space = w.genie.update_space(
-        space_id=existing_space_id,
-        title=space_name,
-        description=space_description,
-        table_identifiers=table_identifiers,
-        warehouse_id=warehouse_id,
-        sample_questions=sample_questions,
+    resp = requests.put(
+        f"{api_base}/genie/spaces/{existing_space_id}",
+        headers=headers,
+        json=space_payload,
     )
+    resp.raise_for_status()
     space_id = existing_space_id
     print(f"Updated existing Genie Space: {space_id}")
 else:
-    # Create a new space
-    genie_space = w.genie.create_space(
-        title=space_name,
-        description=space_description,
-        table_identifiers=table_identifiers,
-        warehouse_id=warehouse_id,
-        sample_questions=sample_questions,
+    resp = requests.post(
+        f"{api_base}/genie/spaces",
+        headers=headers,
+        json=space_payload,
     )
-    space_id = genie_space.space_id
+    resp.raise_for_status()
+    space_id = resp.json()["space_id"]
     print(f"Created new Genie Space: {space_id}")
 
 config['genie_space_id'] = space_id
@@ -123,6 +131,8 @@ config['genie_space_id'] = space_id
 # COMMAND ----------
 
 # DBTITLE 1,Test the Genie Space
+import time
+
 # Send a test question to verify the space is working
 test_question = "What is the average monthly total charge across all customers?"
 
@@ -135,9 +145,8 @@ print(f"Conversation ID: {response.conversation_id}")
 print(f"Message ID: {response.message_id}")
 
 # Poll for result
-import time
-
 max_attempts = 30
+result = None
 for attempt in range(max_attempts):
     result = w.genie.get_message(
         space_id=space_id,
@@ -148,14 +157,16 @@ for attempt in range(max_attempts):
         break
     time.sleep(2)
 
-if hasattr(result, 'status'):
+if result is None:
+    print("Test timed out — no result received.")
+elif hasattr(result, 'status'):
     print(f"Status: {result.status}")
-if hasattr(result, 'attachments') and result.attachments:
-    for att in result.attachments:
-        if hasattr(att, 'text') and att.text:
-            print(f"Response: {att.text.content}")
-        if hasattr(att, 'query') and att.query:
-            print(f"Generated SQL: {att.query.query}")
+    if hasattr(result, 'attachments') and result.attachments:
+        for att in result.attachments:
+            if hasattr(att, 'text') and att.text:
+                print(f"Response: {att.text.content}")
+            if hasattr(att, 'query') and att.query:
+                print(f"Generated SQL: {att.query.query}")
 
 # COMMAND ----------
 

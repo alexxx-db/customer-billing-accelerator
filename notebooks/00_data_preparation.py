@@ -118,7 +118,7 @@ schema = StructType([
 # Get the billing dataset path and import the data into a delta table with the specified schema
 current_workspace_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
 data_dir_path = "/".join(current_workspace_path.split("/")[:-1]) + "/data"
-df_plans = spark.read.format("json").schema(schema).load("dbfs:" + data_dir_path + "/billing_plans.json")
+df_plans = spark.read.format("json").schema(schema).load("file:/Workspace" + data_dir_path + "/billing_plans.json")
 
 # COMMAND ----------
 

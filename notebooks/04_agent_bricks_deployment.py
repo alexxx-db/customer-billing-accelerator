@@ -28,6 +28,12 @@
 # MAGIC 3. `01_create_vector_search` — Create FAQ dataset
 # MAGIC 4. `02_define_uc_tools` — Define UC functions
 # MAGIC 5. `03a_create_genie_space` — Create Genie Space (sets `genie_space_id` in config)
+# MAGIC
+# MAGIC ## Note on Agent Bricks API
+# MAGIC
+# MAGIC Agent Bricks are managed via the Databricks REST API (`/api/2.0/agent-bricks/`).
+# MAGIC This notebook uses `WorkspaceClient().api_client` for direct REST calls since
+# MAGIC the Agent Bricks SDK surface may not be available in all SDK versions.
 
 # COMMAND ----------
 
@@ -50,6 +56,8 @@
 # COMMAND ----------
 
 # DBTITLE 1,Create Volume and Write FAQ Documents
+import json
+
 catalog = config['catalog']
 db = config['database']
 volume_path = config['ka_volume_path']
@@ -59,8 +67,6 @@ spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{db}.billing_faq_docs")
 
 # Read FAQ data from the Delta table
 faq_df = spark.table(f"{catalog}.{db}.billing_faq_dataset").collect()
-
-import json
 
 for row in faq_df:
     idx = row['index']
@@ -103,82 +109,107 @@ print(f"\nTotal files: {len(files)}")
 # MAGIC %md
 # MAGIC ## Step 2: Create Knowledge Assistant
 # MAGIC
-# MAGIC Create a Knowledge Assistant that indexes the billing FAQ documents.
-# MAGIC Uses the `manage_ka` MCP tool via the Databricks SDK.
+# MAGIC Create a Knowledge Assistant that indexes the billing FAQ documents
+# MAGIC using the Agent Bricks REST API.
 
 # COMMAND ----------
 
-# DBTITLE 1,Create or Update Knowledge Assistant
+# DBTITLE 1,Agent Bricks API Helpers
+import time
+import requests
 from databricks.sdk import WorkspaceClient
 
 w = WorkspaceClient()
 
+# Max wait time for endpoint provisioning (seconds)
+MAX_WAIT = 600
+POLL_INTERVAL = 15
+
+
+def _ab_api(method, path, body=None):
+    """Call Agent Bricks REST API via the workspace API client."""
+    api_url = f"{w.config.host}/api/2.0/agent-bricks{path}"
+    headers = {"Authorization": f"Bearer {w.config.token}"}
+    if method == "GET":
+        resp = requests.get(api_url, headers=headers)
+    elif method == "POST":
+        resp = requests.post(api_url, headers=headers, json=body)
+    elif method == "PUT":
+        resp = requests.put(api_url, headers=headers, json=body)
+    elif method == "DELETE":
+        resp = requests.delete(api_url, headers=headers)
+    else:
+        raise ValueError(f"Unsupported method: {method}")
+    resp.raise_for_status()
+    return resp.json() if resp.text else {}
+
+
+def find_tile_by_name(name):
+    """Find an Agent Bricks tile by name. Returns tile dict or None."""
+    sanitized = name.replace(' ', '_')
+    try:
+        tiles = _ab_api("GET", "/tiles")
+        for tile in tiles.get("tiles", []):
+            if tile.get("name") == sanitized or tile.get("name") == name:
+                return tile
+    except Exception as e:
+        print(f"Could not list tiles: {e}")
+    return None
+
+
+def wait_for_tile(tile_id, label="tile"):
+    """Poll until a tile's endpoint is ONLINE, FAILED, or timeout."""
+    print(f"Waiting for {label} endpoint to provision (tile_id: {tile_id})...")
+    elapsed = 0
+    while elapsed < MAX_WAIT:
+        try:
+            tile = _ab_api("GET", f"/tiles/{tile_id}")
+            status = tile.get("endpoint_status", "UNKNOWN")
+            print(f"  Status: {status} ({elapsed}s elapsed)")
+            if status == "ONLINE":
+                print(f"{label} endpoint is ONLINE!")
+                return tile
+            if status == "FAILED":
+                print(f"ERROR: {label} endpoint provisioning failed.")
+                return tile
+        except Exception as e:
+            print(f"  Error checking status: {e}")
+        time.sleep(POLL_INTERVAL)
+        elapsed += POLL_INTERVAL
+    print(f"WARNING: {label} endpoint did not come online within {MAX_WAIT}s. Check the Databricks UI.")
+    return None
+
+# COMMAND ----------
+
+# DBTITLE 1,Create or Update Knowledge Assistant
 ka_name = config['ka_name']
-ka_description = config['ka_description']
-ka_instructions = config['ka_instructions']
 ka_volume_path = config['ka_volume_path']
 
-# Check if KA already exists
-existing_ka = None
-try:
-    tiles = w.agent_bricks.list_tiles()
-    for tile in tiles:
-        if hasattr(tile, 'name') and tile.name == ka_name.replace(' ', '_'):
-            existing_ka = tile
-            print(f"Found existing KA '{ka_name}' with tile_id: {tile.tile_id}")
-            break
-except Exception as e:
-    print(f"Could not check existing KAs: {e}")
+existing_ka = find_tile_by_name(ka_name)
+
+ka_payload = {
+    "name": ka_name,
+    "description": config['ka_description'],
+    "instructions": config['ka_instructions'],
+    "volume_path": ka_volume_path,
+    "add_examples_from_volume": True,
+}
 
 if existing_ka:
-    ka_tile = w.agent_bricks.update_tile(
-        tile_id=existing_ka.tile_id,
-        name=ka_name,
-        description=ka_description,
-        instructions=ka_instructions,
-        volume_path=ka_volume_path,
-    )
-    ka_tile_id = existing_ka.tile_id
-    print(f"Updated existing KA: {ka_tile_id}")
+    ka_tile_id = existing_ka["tile_id"]
+    _ab_api("PUT", f"/tiles/{ka_tile_id}", ka_payload)
+    print(f"Updated existing KA '{ka_name}': {ka_tile_id}")
 else:
-    ka_tile = w.agent_bricks.create_ka(
-        name=ka_name,
-        description=ka_description,
-        instructions=ka_instructions,
-        volume_path=ka_volume_path,
-    )
-    ka_tile_id = ka_tile.tile_id
-    print(f"Created new KA: {ka_tile_id}")
+    result = _ab_api("POST", "/ka", ka_payload)
+    ka_tile_id = result["tile_id"]
+    print(f"Created new KA '{ka_name}': {ka_tile_id}")
 
 config['ka_tile_id'] = ka_tile_id
 
 # COMMAND ----------
 
 # DBTITLE 1,Wait for KA Endpoint to Provision
-import time
-
-print(f"Waiting for KA endpoint to provision (tile_id: {ka_tile_id})...")
-max_wait = 600  # 10 minutes
-elapsed = 0
-
-while elapsed < max_wait:
-    try:
-        status = w.agent_bricks.get_tile(tile_id=ka_tile_id)
-        endpoint_status = getattr(status, 'endpoint_status', 'UNKNOWN')
-        print(f"  Status: {endpoint_status} ({elapsed}s elapsed)")
-        if endpoint_status == "ONLINE":
-            print("KA endpoint is ONLINE!")
-            break
-        if endpoint_status == "FAILED":
-            print("ERROR: KA endpoint provisioning failed.")
-            break
-    except Exception as e:
-        print(f"  Error checking status: {e}")
-    time.sleep(15)
-    elapsed += 15
-
-if elapsed >= max_wait:
-    print(f"WARNING: KA endpoint did not come online within {max_wait}s. Check the Databricks UI.")
+wait_for_tile(ka_tile_id, label="KA")
 
 # COMMAND ----------
 
@@ -204,8 +235,6 @@ print(f"KA Tile ID: {ka_tile_id}")
 
 # DBTITLE 1,Create or Update Supervisor Agent
 mas_name = config['mas_name']
-mas_description = config['mas_description']
-mas_instructions = config['mas_instructions']
 
 agents = [
     {
@@ -235,66 +264,31 @@ examples = [
     {"question": "Compare charges between 12-month and 24-month plans", "guideline": "Should be routed to billing_analytics_agent"},
 ]
 
-# Check if MAS already exists
-existing_mas = None
-try:
-    tiles = w.agent_bricks.list_tiles()
-    for tile in tiles:
-        if hasattr(tile, 'name') and tile.name == mas_name.replace(' ', '_'):
-            existing_mas = tile
-            print(f"Found existing MAS '{mas_name}' with tile_id: {tile.tile_id}")
-            break
-except Exception as e:
-    print(f"Could not check existing MAS tiles: {e}")
+existing_mas = find_tile_by_name(mas_name)
+
+mas_payload = {
+    "name": mas_name,
+    "agents": agents,
+    "description": config['mas_description'],
+    "instructions": config['mas_instructions'],
+    "examples": examples,
+}
 
 if existing_mas:
-    mas_tile = w.agent_bricks.update_tile(
-        tile_id=existing_mas.tile_id,
-        name=mas_name,
-        agents=agents,
-        description=mas_description,
-        instructions=mas_instructions,
-        examples=examples,
-    )
-    mas_tile_id = existing_mas.tile_id
-    print(f"Updated existing MAS: {mas_tile_id}")
+    mas_tile_id = existing_mas["tile_id"]
+    _ab_api("PUT", f"/tiles/{mas_tile_id}", mas_payload)
+    print(f"Updated existing MAS '{mas_name}': {mas_tile_id}")
 else:
-    mas_tile = w.agent_bricks.create_mas(
-        name=mas_name,
-        agents=agents,
-        description=mas_description,
-        instructions=mas_instructions,
-        examples=examples,
-    )
-    mas_tile_id = mas_tile.tile_id
-    print(f"Created new MAS: {mas_tile_id}")
+    result = _ab_api("POST", "/mas", mas_payload)
+    mas_tile_id = result["tile_id"]
+    print(f"Created new MAS '{mas_name}': {mas_tile_id}")
 
 config['mas_tile_id'] = mas_tile_id
 
 # COMMAND ----------
 
 # DBTITLE 1,Wait for MAS Endpoint to Provision
-print(f"Waiting for MAS endpoint to provision (tile_id: {mas_tile_id})...")
-elapsed = 0
-
-while elapsed < max_wait:
-    try:
-        status = w.agent_bricks.get_tile(tile_id=mas_tile_id)
-        endpoint_status = getattr(status, 'endpoint_status', 'UNKNOWN')
-        print(f"  Status: {endpoint_status} ({elapsed}s elapsed)")
-        if endpoint_status == "ONLINE":
-            print("MAS endpoint is ONLINE!")
-            break
-        if endpoint_status == "FAILED":
-            print("ERROR: MAS endpoint provisioning failed.")
-            break
-    except Exception as e:
-        print(f"  Error checking status: {e}")
-    time.sleep(15)
-    elapsed += 15
-
-if elapsed >= max_wait:
-    print(f"WARNING: MAS endpoint did not come online within {max_wait}s. Check the Databricks UI.")
+wait_for_tile(mas_tile_id, label="MAS")
 
 # COMMAND ----------
 

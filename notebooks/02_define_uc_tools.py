@@ -267,7 +267,7 @@ sqlstr_billing_faq  = f"""
 CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.billing_faq(question STRING COMMENT "FAQ search, the question to ask is a frequently asked question about billing")
 RETURNS STRING
 LANGUAGE SQL
-COMMENT 'fqa answer' 
+COMMENT 'FAQ answer' 
 RETURN SELECT concat_ws('\n', collect_list(faq)) from vector_search(index => '{CATALOG}.{SCHEMA}.{INDEX_NAME}', query => question, num_results => 1);
 """
 spark.sql(sqlstr_billing_faq)

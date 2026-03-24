@@ -110,6 +110,12 @@ Guidelines:
 - "Is the anomaly detection job working?" -> lookup_job_reliability(true).
 - Operational questions are about the Databricks infrastructure, not customer billing.
   Never share raw DBU record IDs, cluster IDs, or workspace IDs with end users.
+- For questions about a customer's account standing, credit risk, or payment history,
+  use lookup_customer_erp_profile. Do NOT share ar_balance or overdue_balance directly.
+- For billing dispute investigation or revenue reconciliation, use lookup_revenue_attribution.
+- For finance leadership questions about revenue, ARPU, AR health, OPEX ratios,
+  use get_finance_operations_summary.
+- ERP data may have a 24-hour lag. Revenue variance < 10% is normal timing difference.
 
 Process:
 1. Run FAQ Search -> If an answer exists, return it.
@@ -118,7 +124,8 @@ Process:
 4. When asked about unusual charges or billing anomalies, use lookup_billing_anomalies.
 5. When asked about monitoring status or what's new, use get_monitoring_status.
 6. For platform health or cost questions, use lookup_operational_kpis or lookup_job_reliability.
-7. If missing details (e.g., timeframe), ask clarifying questions.
+7. For ERP/finance questions, use lookup_customer_erp_profile, lookup_revenue_attribution, or get_finance_operations_summary.
+8. If missing details (e.g., timeframe), ask clarifying questions.
 
 Keep responses polite, professional, and concise.
 """
@@ -140,6 +147,9 @@ tools_anomalies = config['tools_anomalies']
 tools_monitoring_status = config['tools_monitoring_status']
 tools_operational_kpis = config['tools_operational_kpis']
 tools_job_reliability = config['tools_job_reliability']
+tools_customer_erp_profile = config['tools_customer_erp_profile']
+tools_revenue_attribution = config['tools_revenue_attribution']
+tools_finance_ops_summary = config['tools_finance_ops_summary']
 agent_name = config['agent_name']
 genie_space_id = config.get('genie_space_id', '') or ''
 agent_prompt = LiteralString(system_prompt)
@@ -162,6 +172,9 @@ yaml_data = {
     "tools_monitoring_status": tools_monitoring_status,
     "tools_operational_kpis": tools_operational_kpis,
     "tools_job_reliability": tools_job_reliability,
+    "tools_customer_erp_profile": tools_customer_erp_profile,
+    "tools_revenue_attribution": tools_revenue_attribution,
+    "tools_finance_ops_summary": tools_finance_ops_summary,
     "agent_name": agent_name,
     "genie_space_id": genie_space_id,
     "agent_prompt": agent_prompt
@@ -246,6 +259,9 @@ with open("config.yaml", "w") as f:
 # MAGIC     config['tools_monitoring_status'],
 # MAGIC     config['tools_operational_kpis'],
 # MAGIC     config['tools_job_reliability'],
+# MAGIC     config['tools_customer_erp_profile'],
+# MAGIC     config['tools_revenue_attribution'],
+# MAGIC     config['tools_finance_ops_summary'],
 # MAGIC     ]
 # MAGIC uc_toolkit = UCFunctionToolkit(function_names=uc_tool_names)
 # MAGIC tools.extend(uc_toolkit.tools)

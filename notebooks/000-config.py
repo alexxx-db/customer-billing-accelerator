@@ -97,6 +97,23 @@ config['telemetry_kpis_table'] = config['catalog']+'.'+config['database']+'.tele
 config['tools_operational_kpis'] = config['catalog']+'.'+config['database']+'.lookup_operational_kpis'
 config['tools_job_reliability'] = config['catalog']+'.'+config['database']+'.lookup_job_reliability'
 
+# External data integration (Gap #5)
+# Track A — real federation (leave empty to use Track B simulation)
+config['erp_connection_host'] = ''
+config['erp_connection_port'] = '5432'
+config['erp_connection_user'] = ''
+# WARNING: Do NOT commit real passwords. Use Databricks Secret Scope:
+# config['erp_connection_password'] = dbutils.secrets.get(scope="billing-erp", key="password")
+config['erp_connection_password'] = ''
+config['erp_connection_database'] = 'erp'
+config['erp_uc_connection'] = ''
+config['erp_foreign_catalog'] = ''
+
+# UC tools — external data
+config['tools_customer_erp_profile'] = config['catalog']+'.'+config['database']+'.lookup_customer_erp_profile'
+config['tools_revenue_attribution'] = config['catalog']+'.'+config['database']+'.lookup_revenue_attribution'
+config['tools_finance_ops_summary'] = config['catalog']+'.'+config['database']+'.get_finance_operations_summary'
+
 # Genie Space
 config['genie_space_name'] = 'Telco Billing Analytics'
 config['genie_space_description'] = (
@@ -109,7 +126,10 @@ config['genie_space_description'] = (
     'telemetry_dbu_daily tracks DBU consumption and estimated cost by SKU and usage type. '
     'telemetry_job_reliability tracks 30-day rolling success rates for platform jobs. '
     'telemetry_warehouse_utilization tracks hourly query performance for the SQL warehouse. '
-    'telemetry_operational_kpis is the daily summary of platform health and cost.'
+    'telemetry_operational_kpis is the daily summary of platform health and cost. '
+    'silver_customer_account_dims joins ERP AR data with telco customers. '
+    'gold_revenue_attribution reconciles billing revenue with ERP recognized revenue. '
+    'gold_finance_operations_summary is the monthly finance ops KPI roll-up.'
 )
 config['genie_space_tables'] = [
     # Domain data
@@ -124,6 +144,13 @@ config['genie_space_tables'] = [
     config['catalog'] + '.' + config['database'] + '.telemetry_job_reliability',
     config['catalog'] + '.' + config['database'] + '.telemetry_warehouse_utilization',
     config['catalog'] + '.' + config['database'] + '.telemetry_operational_kpis',
+    # External data (Silver + Gold only — no simulated Bronze or ext_* views)
+    config['catalog'] + '.' + config['database'] + '.silver_customer_account_dims',
+    config['catalog'] + '.' + config['database'] + '.silver_fx_daily',
+    config['catalog'] + '.' + config['database'] + '.silver_procurement_monthly',
+    config['catalog'] + '.' + config['database'] + '.silver_conformed_kpi_defs',
+    config['catalog'] + '.' + config['database'] + '.gold_revenue_attribution',
+    config['catalog'] + '.' + config['database'] + '.gold_finance_operations_summary',
 ]
 config['genie_space_sample_questions'] = [
     "What is the average monthly total charge across all customers?",
@@ -144,6 +171,12 @@ config['genie_space_sample_questions'] = [
     "On which days did we have cost anomaly flags raised?",
     "What is the average Genie query latency compared to last week?",
     "Which billing pipeline jobs have failed in the last 30 days?",
+    "What is the total billed revenue vs ERP recognized revenue for the last 3 months?",
+    "Which customer segments have the highest overdue AR ratio?",
+    "What is the OPEX ratio trend for the last 6 months?",
+    "Show revenue variance between billing and ERP by account type",
+    "What are the top procurement cost categories and how have they trended?",
+    "Show me the FX rate for EUR over the last 90 days",
 ]
 config['genie_space_id'] = None  # Set by 03a_create_genie_space after creation
 

@@ -395,3 +395,113 @@ display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.lookup_operational_kpis(7);
 # COMMAND ----------
 
 display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.lookup_job_reliability(true);"))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Tool `lookup_customer_erp_profile`
+# MAGIC Returns ERP account profile for a customer.
+
+# COMMAND ----------
+
+# DBTITLE 1,Create lookup_customer_erp_profile Function
+spark.sql(f"DROP FUNCTION IF EXISTS {CATALOG}.{SCHEMA}.lookup_customer_erp_profile;")
+
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.lookup_customer_erp_profile(
+  input_customer_id STRING COMMENT 'Customer ID to look up ERP account profile'
+)
+RETURNS TABLE (
+  customer_id BIGINT, erp_account_id STRING, account_type STRING, credit_rating STRING,
+  payment_terms_days INT, account_status STRING, ar_balance_usd DOUBLE,
+  overdue_balance_usd DOUBLE, erp_segment STRING, erp_source_system STRING
+)
+COMMENT 'Returns ERP account profile for a customer: AR status, credit rating, payment terms. Do NOT expose ar_balance or overdue_balance to the customer directly.'
+RETURN (
+  SELECT customer_id, erp_account_id, account_type, credit_rating,
+         payment_terms_days, account_status, ar_balance_usd,
+         overdue_balance_usd, erp_segment, erp_source_system
+  FROM {CATALOG}.{SCHEMA}.silver_customer_account_dims
+  WHERE customer_id = CAST(input_customer_id AS BIGINT)
+);
+""")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Tool `lookup_revenue_attribution`
+# MAGIC Returns revenue reconciliation between billing and ERP.
+
+# COMMAND ----------
+
+# DBTITLE 1,Create lookup_revenue_attribution Function
+spark.sql(f"DROP FUNCTION IF EXISTS {CATALOG}.{SCHEMA}.lookup_revenue_attribution;")
+
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.lookup_revenue_attribution(
+  input_customer_id STRING COMMENT 'Customer ID',
+  month_filter STRING COMMENT 'Month in YYYY-MM format. Pass empty string for all months.'
+)
+RETURNS TABLE (
+  event_month STRING, billed_total_usd DOUBLE, erp_recognized_revenue_usd DOUBLE,
+  erp_collected_revenue_usd DOUBLE, erp_overdue_revenue_usd DOUBLE,
+  revenue_variance_usd DOUBLE, revenue_variance_pct DOUBLE
+)
+COMMENT 'Returns revenue reconciliation between billing and ERP for a customer. Use for billing dispute investigation.'
+RETURN (
+  SELECT event_month, billed_total_usd, erp_recognized_revenue_usd,
+         erp_collected_revenue_usd, erp_overdue_revenue_usd,
+         revenue_variance_usd, revenue_variance_pct
+  FROM {CATALOG}.{SCHEMA}.gold_revenue_attribution
+  WHERE customer_id = CAST(input_customer_id AS BIGINT)
+    AND (month_filter = '' OR event_month = month_filter)
+  ORDER BY event_month DESC
+);
+""")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Tool `get_finance_operations_summary`
+# MAGIC Returns monthly finance operations KPI summary.
+
+# COMMAND ----------
+
+# DBTITLE 1,Create get_finance_operations_summary Function
+spark.sql(f"DROP FUNCTION IF EXISTS {CATALOG}.{SCHEMA}.get_finance_operations_summary;")
+
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.get_finance_operations_summary(
+  lookback_months INT COMMENT 'Number of months to include (e.g. 3, 6, 12)'
+)
+RETURNS TABLE (
+  event_month STRING, account_type STRING, erp_segment STRING,
+  customer_count BIGINT, total_billed_usd DOUBLE, total_erp_revenue_usd DOUBLE,
+  total_overdue_usd DOUBLE, arpu_usd DOUBLE, total_roaming_revenue_usd DOUBLE,
+  total_intl_revenue_usd DOUBLE, total_opex_usd DOUBLE,
+  opex_ratio_pct DOUBLE, overdue_ar_ratio_pct DOUBLE
+)
+COMMENT 'Returns monthly finance operations KPI summary: revenue, ARPU, AR health, OPEX ratios. Segmented by account type and ERP segment.'
+RETURN (
+  SELECT event_month, account_type, erp_segment, customer_count,
+         total_billed_usd, total_erp_revenue_usd, total_overdue_usd,
+         arpu_usd, total_roaming_revenue_usd, total_intl_revenue_usd,
+         total_opex_usd, opex_ratio_pct, overdue_ar_ratio_pct
+  FROM {CATALOG}.{SCHEMA}.gold_finance_operations_summary
+  WHERE event_month >= DATE_FORMAT(ADD_MONTHS(CURRENT_DATE(), -lookback_months), 'yyyy-MM')
+  ORDER BY event_month DESC, total_billed_usd DESC
+);
+""")
+
+# COMMAND ----------
+
+# DBTITLE 1,Test External Data Functions
+display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.lookup_customer_erp_profile('4401');"))
+
+# COMMAND ----------
+
+display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.lookup_revenue_attribution('4401', '');"))
+
+# COMMAND ----------
+
+display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.get_finance_operations_summary(3);"))

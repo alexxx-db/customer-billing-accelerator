@@ -279,14 +279,16 @@ if availability["billing_usage"]:
         F.col("usage_metadata")["warehouse_id"].alias("warehouse_id"),
         "usage_type",
         F.current_timestamp().alias("ingested_at"),
-    )
+    ).cache()
+
+    dbu_count = dbu_bronze.count()
 
     target = DeltaTable.forName(spark, f"{catalog}.{schema}.telemetry_dbu_usage")
     target.alias("t").merge(
         dbu_bronze.alias("s"), "t.record_id = s.record_id"
     ).whenNotMatchedInsertAll().execute()
 
-    dbu_count = dbu_bronze.count()
+    dbu_bronze.unpersist()
     print(f"telemetry_dbu_usage: {dbu_count} records")
 else:
     print("SKIP: system.billing.usage not accessible")
@@ -303,11 +305,10 @@ if availability["job_run_timeline"] and availability["jobs"]:
     if workspace_id:
         runs = runs.filter(F.col("workspace_id") == workspace_id)
 
-    jobs_meta = spark.table("system.lakeflow.jobs").select("job_id", "name", "creator_user_name")
+    jobs_meta = spark.table("system.lakeflow.jobs")
     if workspace_id:
-        jobs_meta = spark.table("system.lakeflow.jobs").filter(
-            F.col("workspace_id") == workspace_id
-        ).select("job_id", "name", "creator_user_name")
+        jobs_meta = jobs_meta.filter(F.col("workspace_id") == workspace_id)
+    jobs_meta = jobs_meta.select("job_id", "name", "creator_user_name")
 
     job_runs = (
         runs.join(jobs_meta, "job_id", "left")
@@ -320,14 +321,16 @@ if availability["job_run_timeline"] and availability["jobs"]:
             "trigger_type", jobs_meta.creator_user_name,
             F.current_timestamp().alias("ingested_at"),
         )
-    )
+    ).cache()
+
+    jobs_count = job_runs.count()
 
     target = DeltaTable.forName(spark, f"{catalog}.{schema}.telemetry_job_runs")
     target.alias("t").merge(
         job_runs.alias("s"), "t.run_id = s.run_id"
     ).whenNotMatchedInsertAll().execute()
 
-    jobs_count = job_runs.count()
+    job_runs.unpersist()
     print(f"telemetry_job_runs: {jobs_count} records")
 else:
     print("SKIP: system.lakeflow.* not accessible")
@@ -359,14 +362,16 @@ if availability["query_history"] and warehouse_id_filter:
         "start_time", "end_time",
         "client_application",
         F.current_timestamp().alias("ingested_at"),
-    )
+    ).cache()
+
+    queries_count = queries.count()
 
     target = DeltaTable.forName(spark, f"{catalog}.{schema}.telemetry_query_history")
     target.alias("t").merge(
         queries.alias("s"), "t.statement_id = s.statement_id"
     ).whenNotMatchedInsertAll().execute()
 
-    queries_count = queries.count()
+    queries.unpersist()
     print(f"telemetry_query_history: {queries_count} records")
 elif not warehouse_id_filter:
     print("SKIP: warehouse_id not set in config")
@@ -411,10 +416,10 @@ if dbu_count > 0:
                 .drop("list_price_per_dbu")
             )
         except Exception as e:
-            print(f"Could not join list_prices: {e}")
+            print(f"Could not join list_prices (pricing column schema may differ by account): {e}")
 
     spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
-    dbu_daily.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}.telemetry_dbu_daily")
+    dbu_daily.write.mode("overwrite").partitionBy("usage_date").saveAsTable(f"{catalog}.{schema}.telemetry_dbu_daily")
     print(f"telemetry_dbu_daily: {dbu_daily.count()} rows")
 else:
     print("SKIP: telemetry_dbu_daily (no bronze data)")
@@ -428,9 +433,24 @@ if jobs_count > 0:
         config.get("agent_name", "ai_billing_agent"),
     ]
 
-    reliability = (
+    from pyspark.sql.window import Window as W
+
+    runs_30d = (
         spark.table(f"{catalog}.{schema}.telemetry_job_runs")
         .filter(F.to_date("start_time") >= F.lit(str(today - timedelta(days=30))))
+    )
+
+    # Get the most recent result_state per job using a window ordered by start_time
+    w_latest = W.partitionBy("job_id").orderBy(F.col("start_time").desc())
+    latest_state = (
+        runs_30d
+        .withColumn("_rn", F.row_number().over(w_latest))
+        .filter(F.col("_rn") == 1)
+        .select("job_id", F.col("result_state").alias("last_run_state"))
+    )
+
+    reliability = (
+        runs_30d
         .groupBy("job_id", "job_name")
         .agg(
             F.count("*").alias("run_count_30d"),
@@ -439,12 +459,13 @@ if jobs_count > 0:
             F.avg("run_duration_minutes").alias("avg_duration_minutes"),
             F.percentile_approx("run_duration_minutes", 0.95).alias("p95_duration_minutes"),
             F.max("end_time").alias("last_run_ts"),
-            F.last("result_state", ignorenulls=True).alias("last_run_state"),
         )
+        .join(latest_state, "job_id", "left")
         .withColumn("success_rate_pct", F.round(F.col("success_count_30d") / F.col("run_count_30d") * 100, 1))
         .withColumn("is_billing_pipeline", F.col("job_name").isin(BILLING_JOB_NAMES))
     )
 
+    # Full overwrite is intentional — this is a complete 30-day rolling recalculation
     reliability.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}.telemetry_job_reliability")
     print(f"telemetry_job_reliability: {reliability.count()} jobs")
 else:
@@ -468,12 +489,14 @@ if queries_count > 0:
             F.percentile_approx("total_duration_ms", 0.50).alias("p50_duration_ms"),
             F.percentile_approx("total_duration_ms", 0.95).alias("p95_duration_ms"),
             F.percentile_approx("total_duration_ms", 0.99).alias("p99_duration_ms"),
+            F.sum(F.coalesce("total_duration_ms", F.lit(0))).alias("total_duration_ms_sum"),
             F.sum(F.coalesce("waiting_at_capacity_ms", F.lit(0))).alias("total_queuing_ms"),
             F.sum(F.when(F.col("client_application") == "Genie", 1).otherwise(0)).alias("genie_query_count"),
             F.sum(F.when(F.col("client_application").contains("serving"), 1).otherwise(0)).alias("agent_query_count"),
         )
     )
 
+    # Full overwrite is intentional — recalculates all hourly buckets in the window
     wh_util.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}.telemetry_warehouse_utilization")
     print(f"telemetry_warehouse_utilization: {wh_util.count()} hour buckets")
 else:
@@ -541,7 +564,7 @@ if queries_count > 0:
             F.avg(F.when(F.col("genie_query_count") > 0, F.col("p50_duration_ms"))).alias("avg_genie_query_latency_ms"),
             F.sum("genie_query_count").alias("genie_query_count"),
             F.round(
-                F.sum("total_queuing_ms") / F.greatest(F.sum(F.col("query_count") * F.col("p50_duration_ms")), F.lit(1)) * 100, 2
+                F.sum("total_queuing_ms") / F.greatest(F.sum("total_duration_ms_sum"), F.lit(1)) * 100, 2
             ).alias("warehouse_queuing_pct"),
         )
     )
@@ -555,6 +578,7 @@ else:
     kpis = kpis.withColumn("total_dbu_consumed", F.lit(None).cast("double"))
     kpis = kpis.withColumn("estimated_daily_cost_usd", F.lit(None).cast("double"))
 
+# Current 30-day rolling rate as of pipeline run time (same value for all dates in window)
 kpis = kpis.withColumn("billing_pipeline_success_rate", F.lit(pipeline_rate).cast("double"))
 
 if anomaly_job_status:
@@ -593,7 +617,11 @@ print(f"telemetry_operational_kpis: {kpi_count} days")
 # COMMAND ----------
 
 # DBTITLE 1,Summary
-cost_flags = kpis.filter(F.col("cost_anomaly_flag") == True).count() if kpi_count > 0 else 0
+try:
+    _kpi_count = spark.table(f"{catalog}.{schema}.telemetry_operational_kpis").count()
+except Exception:
+    _kpi_count = 0
+
 print(f"""
 System Table Ingestion Complete
 ================================
@@ -601,5 +629,5 @@ Window: {start_date} -> {end_date}
 
 Bronze: telemetry_dbu_usage={dbu_count}, telemetry_job_runs={jobs_count}, telemetry_query_history={queries_count}
 Silver: telemetry_dbu_daily, telemetry_job_reliability, telemetry_warehouse_utilization
-Gold:   telemetry_operational_kpis={kpi_count} days, cost anomaly flags={cost_flags}
+Gold:   telemetry_operational_kpis={_kpi_count} days
 """)

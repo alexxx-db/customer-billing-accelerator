@@ -28,7 +28,7 @@ agent_prompt: |
   - For individual customer lookups (specific customer's bill, plan, etc.), use the
     dedicated lookup tools.
   - To check for billing anomalies (charge spikes, roaming spikes, international spikes,
-    data overages), use the lookup_billing_anomalies tool. You can look up anomalies for
+    data overage spikes), use the lookup_billing_anomalies tool. You can look up anomalies for
     a specific customer or pass an empty string to see recent anomalies across all customers.
 
   Process:

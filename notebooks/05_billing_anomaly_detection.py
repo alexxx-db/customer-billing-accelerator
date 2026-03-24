@@ -14,7 +14,7 @@
 # MAGIC | `total_charge_spike` | Total charges > 2 std deviations above customer's mean |
 # MAGIC | `roaming_spike` | Roaming charges (data + calls + texts) > 3x customer's average roaming |
 # MAGIC | `international_spike` | International charges > 3x customer's average international |
-# MAGIC | `data_overage` | Data charges outside allowance > 0 (customer exceeded plan limit) |
+# MAGIC | `data_overage_spike` | Data overage charge > 3x customer's average overage |
 # MAGIC
 # MAGIC ## Output
 # MAGIC
@@ -167,15 +167,25 @@ df_anomalies_intl = df_with_stats.filter(
     )
 )
 
-# Data overage: any non-zero data_charges_outside_allowance
+# Data overage spike: overage > 3x customer's average overage (only if avg > 0)
+# This avoids flagging routine small overages — only flags unusual spikes
+df_with_stats = df_with_stats.withColumn(
+    "avg_overage", F.avg("data_charges_outside_allowance").over(w_customer)
+)
+
 df_anomalies_overage = df_with_stats.filter(
-    F.col("data_charges_outside_allowance") > 0
-).withColumn("anomaly_type", F.lit("data_overage")).withColumn(
+    (F.col("avg_overage") > 0) &
+    (F.col("data_charges_outside_allowance") > F.col("avg_overage") * ROAMING_MULTIPLIER)
+).withColumn("anomaly_type", F.lit("data_overage_spike")).withColumn(
     "anomaly_detail",
     F.concat(
         F.lit("Data overage charge: $"),
         F.round("data_charges_outside_allowance", 2).cast("string"),
-        F.lit(" on plan "),
+        F.lit(" vs avg $"),
+        F.round("avg_overage", 2).cast("string"),
+        F.lit(" ("),
+        F.round(F.col("data_charges_outside_allowance") / F.col("avg_overage"), 1).cast("string"),
+        F.lit("x average) on plan "),
         F.col("plan_name"),
     )
 )
@@ -198,7 +208,7 @@ df_all_anomalies = (
     .unionByName(df_anomalies_roaming.select(anomaly_columns))
     .unionByName(df_anomalies_intl.select(anomaly_columns))
     .unionByName(df_anomalies_overage.select(anomaly_columns))
-).withColumn("detected_at", F.current_timestamp())
+).withColumn("pipeline_run_at", F.current_timestamp())
 
 anomaly_count = df_all_anomalies.count()
 print(f"Total anomalies detected: {anomaly_count}")
@@ -233,13 +243,10 @@ display(spark.table(ANOMALY_TABLE).orderBy("total_charges", ascending=False).lim
 # COMMAND ----------
 
 # DBTITLE 1,Create lookup_billing_anomalies Function
-CATALOG = config['catalog']
-SCHEMA = config['database']
-
-spark.sql(f"DROP FUNCTION IF EXISTS {CATALOG}.{SCHEMA}.lookup_billing_anomalies;")
+spark.sql(f"DROP FUNCTION IF EXISTS {catalog}.{db}.lookup_billing_anomalies;")
 
 sqlstr_anomalies = f"""
-CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.lookup_billing_anomalies(
+CREATE OR REPLACE FUNCTION {catalog}.{db}.lookup_billing_anomalies(
   input_customer STRING COMMENT 'Customer ID to look up billing anomalies for. Pass empty string to get recent anomalies across all customers.'
 )
 RETURNS TABLE (
@@ -249,9 +256,9 @@ RETURNS TABLE (
     total_charges DOUBLE,
     anomaly_type STRING,
     anomaly_detail STRING,
-    detected_at TIMESTAMP
+    pipeline_run_at TIMESTAMP
 )
-COMMENT 'Returns billing anomalies for a customer (charge spikes, roaming spikes, international spikes, data overages). Pass empty string for recent anomalies across all customers.'
+COMMENT 'Returns billing anomalies for a customer (charge spikes, roaming spikes, international spikes, data overage spikes). Pass empty string for recent anomalies across all customers.'
 RETURN (
   SELECT
     customer_id,
@@ -260,51 +267,26 @@ RETURN (
     total_charges,
     anomaly_type,
     anomaly_detail,
-    detected_at
-  FROM {CATALOG}.{SCHEMA}.billing_anomalies
+    pipeline_run_at
+  FROM {catalog}.{db}.billing_anomalies
   WHERE (input_customer = '' OR customer_id = CAST(input_customer AS DECIMAL))
   ORDER BY total_charges DESC
   LIMIT 50
 );
 """
 spark.sql(sqlstr_anomalies)
-print(f"Created function {CATALOG}.{SCHEMA}.lookup_billing_anomalies")
+print(f"Created function {catalog}.{db}.lookup_billing_anomalies")
 
 # COMMAND ----------
 
 # DBTITLE 1,Test the Function
-display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.lookup_billing_anomalies('') LIMIT 10"))
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 5: Create PII-Safe View for Genie Space
-
-# COMMAND ----------
-
-# DBTITLE 1,Create billing_anomalies_analytics View
-spark.sql(f"""
-CREATE OR REPLACE VIEW {CATALOG}.{SCHEMA}.billing_anomalies_analytics AS
-SELECT
-    customer_id,
-    event_month,
-    plan_name,
-    total_charges,
-    anomaly_type,
-    anomaly_detail,
-    detected_at
-FROM {CATALOG}.{SCHEMA}.billing_anomalies
-""")
-print(f"Created view {CATALOG}.{SCHEMA}.billing_anomalies_analytics")
+display(spark.sql(f"SELECT * FROM {catalog}.{db}.lookup_billing_anomalies('') LIMIT 10"))
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Summary
 # MAGIC
-# MAGIC The anomaly detection pipeline is complete. Next steps:
-# MAGIC
-# MAGIC 1. Add `lookup_billing_anomalies` to the agent's tool list in `config.yaml` and `agent.py`
-# MAGIC 2. Add `billing_anomalies_analytics` to the Genie Space table list in `000-config.py`
-# MAGIC 3. Update the agent prompt to mention anomaly detection capability
-# MAGIC 4. Re-run notebook `03` or `04` to redeploy the agent
+# MAGIC The anomaly detection pipeline is complete. The `billing_anomalies` table, `lookup_billing_anomalies`
+# MAGIC UC function, and Genie Space table list have all been configured. Re-run notebook `03` or `04`
+# MAGIC to redeploy the agent with the anomaly detection tool.

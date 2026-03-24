@@ -147,9 +147,6 @@ display(df_plans)
 import dbldatagen as dg
 import pyspark.sql.functions as F
 
-shuffle_partitions_requested = 8
-partitions_requested = 1
-
 spark.conf.set("spark.sql.shuffle.partitions", shuffle_partitions_requested)
 spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
 spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 20000)

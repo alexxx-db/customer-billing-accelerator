@@ -4,10 +4,9 @@ import dash_bootstrap_components as dbc
 from model_serving_utils import query_endpoint
 
 class DatabricksChatbot:
-    def __init__(self, app, endpoint_name, height='600px'):
+    def __init__(self, app, endpoint_name):
         self.app = app
         self.endpoint_name = endpoint_name
-        self.height = height
         self.layout = self._create_layout()
         self._create_callbacks()
         self._add_custom_css()

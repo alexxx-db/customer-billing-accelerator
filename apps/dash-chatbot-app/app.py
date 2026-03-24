@@ -9,8 +9,8 @@ assert serving_endpoint, 'SERVING_ENDPOINT must be set in app.yaml.'
 # Initialize the Dash app with a clean theme
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
 
-# Create the chatbot component with a specified height
-chatbot = DatabricksChatbot(app=app, endpoint_name=serving_endpoint, height='600px')
+# Create the chatbot component
+chatbot = DatabricksChatbot(app=app, endpoint_name=serving_endpoint)
 
 # Define the app layout
 app.layout = dbc.Container([

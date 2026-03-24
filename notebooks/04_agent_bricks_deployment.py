@@ -126,10 +126,17 @@ MAX_WAIT = 600
 POLL_INTERVAL = 15
 
 
+def _get_auth_headers():
+    """Get authorization headers using the SDK's auth provider (supports PAT, OAuth, Azure CLI, etc.)."""
+    headers = {}
+    w.config.authenticate(headers)
+    return headers
+
+
 def _ab_api(method, path, body=None):
     """Call Agent Bricks REST API via the workspace API client."""
     api_url = f"{w.config.host}/api/2.0/agent-bricks{path}"
-    headers = {"Authorization": f"Bearer {w.config.token}"}
+    headers = _get_auth_headers()
     if method == "GET":
         resp = requests.get(api_url, headers=headers)
     elif method == "POST":

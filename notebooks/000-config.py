@@ -77,6 +77,16 @@ config['tools_items'] = config['catalog']+'.'+config['database']+'.lookup_billin
 config['tools_plans'] = config['catalog']+'.'+config['database']+'.lookup_billing_plans'
 config['tools_customer'] = config['catalog']+'.'+config['database']+'.lookup_customer'
 config['tools_anomalies'] = config['catalog']+'.'+config['database']+'.lookup_billing_anomalies'
+config['tools_alerts'] = config['catalog']+'.'+config['database']+'.lookup_billing_alerts'
+config['tools_new_alerts'] = config['catalog']+'.'+config['database']+'.lookup_new_alerts'
+config['tools_monitoring_status'] = config['catalog']+'.'+config['database']+'.get_monitoring_status'
+
+# Continuous monitoring
+config['dlt_pipeline_id'] = ''
+config['monitoring_state_table'] = config['catalog']+'.'+config['database']+'.billing_monitoring_state'
+config['monitoring_summary_view'] = config['catalog']+'.'+config['database']+'.billing_monitoring_summary'
+config['dlt_events_table'] = config['catalog']+'.'+config['database']+'.billing_events_streaming'
+config['dlt_running_table'] = config['catalog']+'.'+config['database']+'.billing_monthly_running'
 
 # Genie Space
 config['genie_space_name'] = 'Telco Billing Analytics'
@@ -92,6 +102,8 @@ config['genie_space_tables'] = [
     config['catalog'] + '.' + config['database'] + '.invoice_analytics',
     config['catalog'] + '.' + config['database'] + '.billing_plans',
     config['catalog'] + '.' + config['database'] + '.billing_anomalies',
+    config['catalog'] + '.' + config['database'] + '.billing_monitoring_state',
+    config['catalog'] + '.' + config['database'] + '.billing_monthly_running',
 ]
 config['genie_space_sample_questions'] = [
     "What is the average monthly total charge across all customers?",
@@ -103,6 +115,10 @@ config['genie_space_sample_questions'] = [
     "Compare average total charges between 12-month and 24-month contract plans",
     "How many billing anomalies were detected by type?",
     "Which customers have the most billing anomalies?",
+    "How many anomalies have been alerted vs how many are still pending notification?",
+    "What is the real-time estimated total charge for the top 10 highest-spending customers this month?",
+    "Which customers have anomalies that have not been alerted yet?",
+    "Show the trend of estimated charges vs actual billed charges for the last 3 months",
 ]
 config['genie_space_id'] = None  # Set by 03a_create_genie_space after creation
 

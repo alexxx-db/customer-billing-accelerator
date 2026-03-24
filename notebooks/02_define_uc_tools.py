@@ -271,3 +271,44 @@ COMMENT 'FAQ answer'
 RETURN SELECT concat_ws('\n', collect_list(faq)) from vector_search(index => '{CATALOG}.{SCHEMA}.{INDEX_NAME}', query => question, num_results => 1);
 """
 spark.sql(sqlstr_billing_faq)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Tool `get_monitoring_status`
+# MAGIC Returns the current monitoring state: what's been detected, what's been alerted,
+# MAGIC and what's pending review. Use for questions like "what's new since yesterday?"
+
+# COMMAND ----------
+
+# DBTITLE 1,Create get_monitoring_status Function
+spark.sql(f"DROP FUNCTION IF EXISTS {CATALOG}.{SCHEMA}.get_monitoring_status;")
+
+sqlstr_monitoring_status = f"""
+CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.get_monitoring_status(
+  since_hours INT COMMENT 'Look back this many hours. Use 24 for daily summary, 168 for weekly. Use 0 for all time.'
+)
+RETURNS TABLE (
+  event_month          STRING,
+  anomaly_type         STRING,
+  total_anomalies      BIGINT,
+  alerted_count        BIGINT,
+  pending_alert_count  BIGINT,
+  last_detection_ts    TIMESTAMP,
+  last_alert_ts        TIMESTAMP
+)
+COMMENT 'Returns current monitoring summary. Use to answer: how many anomalies exist, which are new, which have been alerted. For what is new since yesterday use since_hours=24.'
+RETURN (
+  SELECT *
+  FROM {CATALOG}.{SCHEMA}.billing_monitoring_summary
+  WHERE since_hours = 0
+     OR last_detection_ts >= CURRENT_TIMESTAMP - MAKE_INTERVAL(0, 0, 0, 0, since_hours, 0, 0)
+  ORDER BY event_month DESC
+);
+"""
+spark.sql(sqlstr_monitoring_status)
+
+# COMMAND ----------
+
+# DBTITLE 1,Test get_monitoring_status
+display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.get_monitoring_status(0);"))

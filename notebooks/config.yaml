@@ -13,6 +13,17 @@ tools_anomalies: cme_demos_alex_barreto.telco_billing_db.lookup_billing_anomalie
 tools_monitoring_status: cme_demos_alex_barreto.telco_billing_db.get_monitoring_status
 tools_operational_kpis: cme_demos_alex_barreto.telco_billing_db.lookup_operational_kpis
 tools_job_reliability: cme_demos_alex_barreto.telco_billing_db.lookup_job_reliability
+tools_customer_erp_profile: cme_demos_alex_barreto.telco_billing_db.lookup_customer_erp_profile
+tools_revenue_attribution: cme_demos_alex_barreto.telco_billing_db.lookup_revenue_attribution
+tools_finance_ops_summary: cme_demos_alex_barreto.telco_billing_db.get_finance_operations_summary
+erp_connection_host: ''
+erp_connection_port: '5432'
+erp_connection_user: ''
+# WARNING: Do NOT commit real passwords
+erp_connection_password: ''
+erp_connection_database: erp
+erp_uc_connection: ''
+erp_foreign_catalog: ''
 telemetry_dbu_table: cme_demos_alex_barreto.telco_billing_db.telemetry_dbu_usage
 telemetry_jobs_table: cme_demos_alex_barreto.telco_billing_db.telemetry_job_runs
 telemetry_queries_table: cme_demos_alex_barreto.telco_billing_db.telemetry_query_history
@@ -60,6 +71,12 @@ agent_prompt: |
   - "Is the anomaly detection job working?" -> lookup_job_reliability(true).
   - Operational questions are about the Databricks infrastructure, not customer billing.
     Never share raw DBU record IDs, cluster IDs, or workspace IDs with end users.
+  - For questions about a customer's account standing, credit risk, or payment history,
+    use lookup_customer_erp_profile. Do NOT share ar_balance or overdue_balance directly.
+  - For billing dispute investigation or revenue reconciliation, use lookup_revenue_attribution.
+  - For finance leadership questions about revenue, ARPU, AR health, OPEX ratios,
+    use get_finance_operations_summary.
+  - ERP data may have a 24-hour lag. Revenue variance < 10% is normal timing difference.
 
   Process:
   1. Run FAQ Search -> If an answer exists, return it.
@@ -68,6 +85,7 @@ agent_prompt: |
   4. When asked about unusual charges or billing anomalies, use lookup_billing_anomalies.
   5. When asked about monitoring status or what's new, use get_monitoring_status.
   6. For platform health or cost questions, use lookup_operational_kpis or lookup_job_reliability.
-  7. If missing details (e.g., timeframe), ask clarifying questions.
+  7. For ERP/finance questions, use lookup_customer_erp_profile, lookup_revenue_attribution, or get_finance_operations_summary.
+  8. If missing details (e.g., timeframe), ask clarifying questions.
 
   Keep responses polite, professional, and concise.

@@ -63,6 +63,9 @@ uc_tool_names = [
     config['tools_monitoring_status'],
     config['tools_operational_kpis'],
     config['tools_job_reliability'],
+    config['tools_customer_erp_profile'],
+    config['tools_revenue_attribution'],
+    config['tools_finance_ops_summary'],
     ]
 uc_toolkit = UCFunctionToolkit(function_names=uc_tool_names)
 tools.extend(uc_toolkit.tools)

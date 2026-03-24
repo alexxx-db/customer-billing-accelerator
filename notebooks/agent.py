@@ -60,6 +60,9 @@ uc_tool_names = [
     config['tools_plans'],
     config['tools_customer'],
     config['tools_anomalies'],
+    config['tools_alerts'],
+    config['tools_new_alerts'],
+    config['tools_monitoring_status'],
     ]
 uc_toolkit = UCFunctionToolkit(function_names=uc_tool_names)
 tools.extend(uc_toolkit.tools)

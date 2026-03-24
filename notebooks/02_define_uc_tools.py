@@ -202,9 +202,9 @@ CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.lookup_billing(
 )
 RETURNS TABLE (
     customer_id BIGINT,
-    customer_name STRING,
     event_month STRING,
-    phone_number BIGINT,
+    plan_name STRING,
+    monthly_charges DOUBLE,
     data_charges_outside_allowance DOUBLE,
     roaming_data_charges DOUBLE,
     roaming_call_charges DOUBLE,
@@ -213,13 +213,13 @@ RETURNS TABLE (
     international_text_charges DOUBLE,
     total_charges DOUBLE
 )
-COMMENT "Returns billing information for the customer given the customer_id"
+COMMENT "Returns billing information for the customer given the customer_id. Does not return PII fields."
 RETURN
-SELECT 
+SELECT
     customer_id,
-    customer_name,
     event_month,
-    phone_number,
+    plan_name,
+    monthly_charges,
     data_charges_outside_allowance,
     roaming_data_charges,
     roaming_call_charges,

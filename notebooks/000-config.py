@@ -81,13 +81,13 @@ config['tools_customer'] = config['catalog']+'.'+config['database']+'.lookup_cus
 config['genie_space_name'] = 'Telco Billing Analytics'
 config['genie_space_description'] = (
     'Natural language analytics over telco billing data. '
-    'Includes customer invoices with monthly charge breakdowns (roaming, international, data overage), '
-    'customer master data (plan, contract start date), and billing plan details (pricing, data limits, allowances). '
-    'Tables join on customer plan key. Invoice has monthly granularity per customer.'
+    'Includes invoice_analytics with monthly charge breakdowns per customer (roaming, international, data overage, plan info) '
+    'and billing_plans with plan pricing, data limits, and allowances. '
+    'Tables join via plan_name. Invoice has monthly granularity per customer_id. '
+    'PII fields (names, emails, phone numbers) are excluded.'
 )
 config['genie_space_tables'] = [
-    config['catalog'] + '.' + config['database'] + '.invoice',
-    config['catalog'] + '.' + config['database'] + '.customers',
+    config['catalog'] + '.' + config['database'] + '.invoice_analytics',
     config['catalog'] + '.' + config['database'] + '.billing_plans',
 ]
 config['genie_space_sample_questions'] = [

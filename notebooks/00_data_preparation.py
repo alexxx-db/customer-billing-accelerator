@@ -82,10 +82,6 @@ MB_100 = config['MB_100']
 K_1 = config['K_1']
 start_dt=config['start_dt']
 end_dt=config['end_dt']
-vector_search_index=config['catalog']
-
-llm_endpoint=config['llm_endpoint']
-warehouse_id=config['warehouse_id']
 
 # COMMAND ----------
 

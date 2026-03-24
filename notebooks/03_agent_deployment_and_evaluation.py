@@ -40,7 +40,7 @@
 # MAGIC
 # MAGIC Before running this notebook:
 # MAGIC
-# MAGIC - Update and validate the `config.yml` to define agent tools, LLM endpoints, and system prompt.
+# MAGIC - Update and validate the `config.yaml` to define agent tools, LLM endpoints, and system prompt.
 # MAGIC - Run the `agent` notebook to define and test your agent.
 # MAGIC - Ensure the `faq_index` and `billing_faq_dataset` are available and correctly formatted in Unity Catalog.
 # MAGIC
@@ -66,7 +66,6 @@
 # COMMAND ----------
 
 import yaml
-from yaml.representer import SafeRepresenter
 
 class LiteralString(str):
     pass
@@ -226,6 +225,8 @@ with open("config.yaml", "w") as f:
 # MAGIC genie_space_id = config.get('genie_space_id', '')
 # MAGIC
 # MAGIC if genie_space_id:
+# MAGIC     _genie_client = WorkspaceClient()
+# MAGIC
 # MAGIC     @tool
 # MAGIC     def ask_billing_analytics(question: str) -> str:
 # MAGIC         """Ask an ad-hoc billing analytics question using natural language.
@@ -240,9 +241,7 @@ with open("config.yaml", "w") as f:
 # MAGIC         Do NOT use this for individual customer lookups — use the dedicated
 # MAGIC         lookup_customer, lookup_billing, or lookup_billing_items tools instead.
 # MAGIC         """
-# MAGIC         w = WorkspaceClient()
-# MAGIC
-# MAGIC         response = w.genie.start_conversation(
+# MAGIC         response = _genie_client.genie.start_conversation(
 # MAGIC             space_id=genie_space_id,
 # MAGIC             content=question,
 # MAGIC         )
@@ -252,8 +251,9 @@ with open("config.yaml", "w") as f:
 # MAGIC
 # MAGIC         # Poll for completion (Genie queries are async)
 # MAGIC         max_attempts = 30
+# MAGIC         result = None
 # MAGIC         for _ in range(max_attempts):
-# MAGIC             result = w.genie.get_message(
+# MAGIC             result = _genie_client.genie.get_message(
 # MAGIC                 space_id=genie_space_id,
 # MAGIC                 conversation_id=conversation_id,
 # MAGIC                 message_id=message_id,
@@ -262,8 +262,14 @@ with open("config.yaml", "w") as f:
 # MAGIC                 break
 # MAGIC             time.sleep(2)
 # MAGIC
-# MAGIC         if hasattr(result, 'status') and result.status == "FAILED":
+# MAGIC         if result is None or not hasattr(result, 'status'):
+# MAGIC             return "The analytics query timed out. Please try a simpler question."
+# MAGIC
+# MAGIC         if result.status == "FAILED":
 # MAGIC             return "The analytics query could not be completed. Please try rephrasing your question."
+# MAGIC
+# MAGIC         if result.status != "COMPLETED":
+# MAGIC             return "The analytics query timed out. Please try a simpler question."
 # MAGIC
 # MAGIC         # Extract results from attachments
 # MAGIC         if hasattr(result, 'attachments') and result.attachments:
@@ -368,7 +374,7 @@ with open("config.yaml", "w") as f:
 # MAGIC         for event in self.agent.stream(request, stream_mode="updates"):
 # MAGIC             for node_data in event.values():
 # MAGIC                 yield from (
-# MAGIC                     ChatAgentChunk(**{"delta": msg}) for msg in node_data["messages"]
+# MAGIC                     ChatAgentChunk(**{"delta": msg}) for msg in node_data.get("messages", [])
 # MAGIC                 )
 # MAGIC
 # MAGIC

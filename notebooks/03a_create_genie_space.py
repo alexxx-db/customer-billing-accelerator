@@ -17,8 +17,7 @@
 # MAGIC
 # MAGIC | Table | Description |
 # MAGIC |-------|-------------|
-# MAGIC | `invoice` | Monthly billing aggregates per customer with charge breakdowns |
-# MAGIC | `customers` | Customer master data including plan and contract details |
+# MAGIC | `invoice_analytics` | PII-safe view of monthly billing aggregates per customer (excludes names, emails, phone numbers) |
 # MAGIC | `billing_plans` | Plan catalog with pricing, data limits, and allowances |
 # MAGIC
 # MAGIC ---
@@ -37,13 +36,45 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Create PII-Safe Invoice View for Genie
+catalog = config['catalog']
+db = config['database']
+
+spark.sql(f"""
+CREATE OR REPLACE VIEW {catalog}.{db}.invoice_analytics AS
+SELECT
+    customer_id,
+    event_month,
+    plan_name,
+    contract_start_dt,
+    contract_in_months,
+    monthly_charges,
+    Calls_Text,
+    Internet_Speed_MBPS,
+    Data_Limit_GB,
+    data_local_mb,
+    data_roaming_mb,
+    call_mins_roaming,
+    texts_roaming,
+    call_mins_international,
+    texts_international,
+    data_charges_outside_allowance,
+    roaming_data_charges,
+    roaming_call_charges,
+    roaming_text_charges,
+    international_call_charges,
+    international_text_charges,
+    total_charges
+FROM {catalog}.{db}.invoice
+""")
+print(f"Created view {catalog}.{db}.invoice_analytics (PII columns excluded)")
+
+# COMMAND ----------
+
 # DBTITLE 1,Create or Update Genie Space
 from databricks.sdk import WorkspaceClient
 
 w = WorkspaceClient()
-
-CATALOG = config['catalog']
-SCHEMA = config['database']
 
 space_name = config['genie_space_name']
 space_description = config['genie_space_description']

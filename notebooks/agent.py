@@ -72,6 +72,8 @@ tools.extend(uc_toolkit.tools)
 genie_space_id = config.get('genie_space_id', '')
 
 if genie_space_id:
+    _genie_client = WorkspaceClient()
+
     @tool
     def ask_billing_analytics(question: str) -> str:
         """Ask an ad-hoc billing analytics question using natural language.
@@ -86,9 +88,7 @@ if genie_space_id:
         Do NOT use this for individual customer lookups — use the dedicated
         lookup_customer, lookup_billing, or lookup_billing_items tools instead.
         """
-        w = WorkspaceClient()
-
-        response = w.genie.start_conversation(
+        response = _genie_client.genie.start_conversation(
             space_id=genie_space_id,
             content=question,
         )
@@ -98,8 +98,9 @@ if genie_space_id:
 
         # Poll for completion (Genie queries are async)
         max_attempts = 30
+        result = None
         for _ in range(max_attempts):
-            result = w.genie.get_message(
+            result = _genie_client.genie.get_message(
                 space_id=genie_space_id,
                 conversation_id=conversation_id,
                 message_id=message_id,
@@ -108,8 +109,14 @@ if genie_space_id:
                 break
             time.sleep(2)
 
-        if hasattr(result, 'status') and result.status == "FAILED":
+        if result is None or not hasattr(result, 'status'):
+            return "The analytics query timed out. Please try a simpler question."
+
+        if result.status == "FAILED":
             return "The analytics query could not be completed. Please try rephrasing your question."
+
+        if result.status != "COMPLETED":
+            return "The analytics query timed out. Please try a simpler question."
 
         # Extract results from attachments
         if hasattr(result, 'attachments') and result.attachments:
@@ -214,7 +221,7 @@ class LangGraphChatAgent(ChatAgent):
         for event in self.agent.stream(request, stream_mode="updates"):
             for node_data in event.values():
                 yield from (
-                    ChatAgentChunk(**{"delta": msg}) for msg in node_data["messages"]
+                    ChatAgentChunk(**{"delta": msg}) for msg in node_data.get("messages", [])
                 )
 
 

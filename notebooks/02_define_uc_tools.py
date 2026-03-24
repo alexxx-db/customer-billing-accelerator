@@ -21,8 +21,8 @@
 
 # DBTITLE 1,Install and Update Required Python Packages
 # Install required packages
-%pip install -U -qqqq mlflow-skinny langchain==0.2.16 langgraph-checkpoint==1.0.12 langchain_core langchain-community==0.2.16 langgraph==0.3.4 pydantic langchain_databricks unitycatalog-langchain unitycatalog-ai
-dbutils.library.restartPython()
+# MAGIC %pip install -U -qqqq mlflow-skinny langchain==0.2.16 langgraph-checkpoint==1.0.12 langchain_core langchain-community==0.2.16 langgraph==0.3.4 pydantic langchain_databricks unitycatalog-langchain unitycatalog-ai
+# MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 

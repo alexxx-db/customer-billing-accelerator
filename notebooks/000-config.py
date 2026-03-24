@@ -100,3 +100,29 @@ config['genie_space_sample_questions'] = [
     "Compare average total charges between 12-month and 24-month contract plans",
 ]
 config['genie_space_id'] = None  # Set by 03a_create_genie_space after creation
+
+# Agent Bricks (Supervisor Agent)
+config['ka_name'] = 'Telco Billing FAQ'
+config['ka_description'] = 'Answers frequently asked billing questions about bill calculation, payments, autopay, disputes, refunds, late fees, data usage, roaming charges, and due date changes.'
+config['ka_instructions'] = (
+    'Answer billing questions using the FAQ documents. '
+    'Be concise and cite the relevant FAQ when possible. '
+    'If the question is not covered by the FAQ, say so and suggest contacting customer support.'
+)
+config['ka_volume_path'] = f"/Volumes/{config['catalog']}/{config['database']}/billing_faq_docs"
+config['ka_tile_id'] = None  # Set by 04_agent_bricks_deployment after creation
+
+config['mas_name'] = 'Telco Billing Support'
+config['mas_description'] = (
+    'Telco billing support supervisor that routes queries to specialized agents: '
+    'a FAQ Knowledge Assistant for general billing questions and a Genie Space '
+    'for ad-hoc billing analytics across the customer base.'
+)
+config['mas_instructions'] = """Route queries as follows:
+- General billing questions, how-to, policy/procedure -> billing_faq_agent
+- Data analysis, charge trends, plan comparisons, aggregations, top-N -> billing_analytics_agent
+- Questions spanning both -> chain FAQ for explanation, then Analytics for data; synthesize one answer.
+
+If the query requires a specific customer's billing details, inform the user that individual lookups require the dedicated customer care tools.
+If unclear, ask the user to clarify."""
+config['mas_tile_id'] = None  # Set by 04_agent_bricks_deployment after creation

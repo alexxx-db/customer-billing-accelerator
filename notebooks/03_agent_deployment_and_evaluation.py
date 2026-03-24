@@ -263,8 +263,25 @@ with open("config.yaml", "w") as f:
 # MAGIC
 # MAGIC WRITE_PENDING_PREFIX = "WRITE_PENDING"
 # MAGIC
-# MAGIC CONFIRM_PHRASES = {"confirm", "yes", "proceed", "approve", "ok", "go ahead", "do it"}
-# MAGIC CANCEL_PHRASES  = {"cancel", "no", "stop", "abort", "never mind", "don't"}
+# MAGIC CONFIRM_PHRASES = {"confirm", "yes", "proceed", "approve", "go ahead", "do it"}
+# MAGIC CANCEL_PHRASES  = {"cancel", "stop", "abort", "never mind", "don't"}
+# MAGIC
+# MAGIC # Module-level WorkspaceClient for write operations (reused across calls)
+# MAGIC _write_client = None
+# MAGIC
+# MAGIC def _get_write_client():
+# MAGIC     global _write_client
+# MAGIC     if _write_client is None:
+# MAGIC         _write_client = WorkspaceClient()
+# MAGIC     return _write_client
+# MAGIC
+# MAGIC
+# MAGIC def _sanitize_sql_str(val: str) -> str:
+# MAGIC     """Sanitize a string for SQL injection prevention beyond single-quote escaping."""
+# MAGIC     if val is None:
+# MAGIC         return ""
+# MAGIC     # Replace single quotes, backslashes, and null bytes
+# MAGIC     return val.replace("\\", "\\\\").replace("'", "''").replace("\x00", "")
 # MAGIC
 # MAGIC
 # MAGIC def _execute_sql(sql: str, warehouse_id: str, action_type: str,
@@ -274,7 +291,7 @@ with open("config.yaml", "w") as f:
 # MAGIC     Writes two audit records (PENDING before, then SUCCESS/FAILED after) — pure append."""
 # MAGIC     from databricks.sdk.service.sql import StatementState
 # MAGIC
-# MAGIC     w = WorkspaceClient()
+# MAGIC     w = _get_write_client()
 # MAGIC     audit_id = str(uuid.uuid4())
 # MAGIC     executed_at = datetime.now(timezone.utc).isoformat()
 # MAGIC     cat = config['catalog']
@@ -293,8 +310,8 @@ with open("config.yaml", "w") as f:
 # MAGIC       {customer_id if customer_id is not None else 'NULL'},
 # MAGIC       {f"'{session_id}'" if session_id else 'NULL'},
 # MAGIC       'ai_billing_agent',
-# MAGIC       '{json.dumps(payload).replace("'", "''")}',
-# MAGIC       '{sql.replace("'", "''")}',
+# MAGIC       '{_sanitize_sql_str(json.dumps(payload))}',
+# MAGIC       '{_sanitize_sql_str(sql)}',
 # MAGIC       'PENDING', 'Audit pre-written before business SQL.', NULL,
 # MAGIC       TIMESTAMP '{executed_at}'
 # MAGIC     )
@@ -341,7 +358,7 @@ with open("config.yaml", "w") as f:
 # MAGIC                 {customer_id if customer_id is not None else 'NULL'},
 # MAGIC                 {f"'{session_id}'" if session_id else 'NULL'},
 # MAGIC                 'ai_billing_agent', NULL, NULL, 'FAILED',
-# MAGIC                 'Business SQL failed.', '{error[:500].replace("'", "''")}',
+# MAGIC                 'Business SQL failed.', '{_sanitize_sql_str(error[:500])}',
 # MAGIC                 TIMESTAMP '{datetime.now(timezone.utc).isoformat()}')""",
 # MAGIC                 warehouse_id=warehouse_id, wait_timeout="10s")
 # MAGIC             return {"success": False, "message": f"Write failed: {error}", "audit_id": audit_id}
@@ -360,20 +377,20 @@ with open("config.yaml", "w") as f:
 # MAGIC     return None
 # MAGIC
 # MAGIC
-# MAGIC def _user_confirmed(messages: list[dict]) -> bool:
+# MAGIC def _get_user_intent(messages: list[dict]) -> str:
+# MAGIC     """Returns 'confirm', 'cancel', or 'unclear' based on the most recent user message.
+# MAGIC     Cancel takes priority over confirm if both match (safety-first)."""
 # MAGIC     for msg in reversed(messages[-2:]):
 # MAGIC         if msg.get("role") == "user":
 # MAGIC             text = (msg.get("content", "") or "").lower().strip()
-# MAGIC             return any(phrase in text for phrase in CONFIRM_PHRASES)
-# MAGIC     return False
-# MAGIC
-# MAGIC
-# MAGIC def _user_cancelled(messages: list[dict]) -> bool:
-# MAGIC     for msg in reversed(messages[-2:]):
-# MAGIC         if msg.get("role") == "user":
-# MAGIC             text = (msg.get("content", "") or "").lower().strip()
-# MAGIC             return any(phrase in text for phrase in CANCEL_PHRASES)
-# MAGIC     return False
+# MAGIC             has_cancel = any(phrase in text for phrase in CANCEL_PHRASES)
+# MAGIC             has_confirm = any(phrase in text for phrase in CONFIRM_PHRASES)
+# MAGIC             if has_cancel:
+# MAGIC                 return "cancel"
+# MAGIC             if has_confirm:
+# MAGIC                 return "confirm"
+# MAGIC             return "unclear"
+# MAGIC     return "unclear"
 # MAGIC
 # MAGIC
 # MAGIC ###############################################################################
@@ -505,7 +522,7 @@ with open("config.yaml", "w") as f:
 # MAGIC         UPDATE {cat}.{sch}.billing_anomalies
 # MAGIC         SET acknowledged_by = 'ai_billing_agent',
 # MAGIC             acknowledged_at = TIMESTAMP '{now_ts}',
-# MAGIC             acknowledgement_reason = '{reason.replace("'", "''")}'
+# MAGIC             acknowledgement_reason = '{_sanitize_sql_str(reason)}'
 # MAGIC         WHERE CONCAT(CAST(customer_id AS STRING), '-', event_month, '-', anomaly_type) = '{anomaly_id}'
 # MAGIC     """
 # MAGIC     result = _execute_sql(sql=sql, warehouse_id=warehouse_id,
@@ -550,7 +567,7 @@ with open("config.yaml", "w") as f:
 # MAGIC         VALUES ('{dispute_id}', {int(customer_id)},
 # MAGIC           {f"'{anomaly_id}'" if anomaly_id else 'NULL'},
 # MAGIC           {f"'{event_month}'" if event_month else 'NULL'},
-# MAGIC           '{dispute_type}', 'OPEN', '{description.replace("'", "''")}',
+# MAGIC           '{dispute_type}', 'OPEN', '{_sanitize_sql_str(description)}',
 # MAGIC           {amount}, 'ai_billing_agent', TIMESTAMP '{now_ts}', TIMESTAMP '{now_ts}')
 # MAGIC     """
 # MAGIC     result = _execute_sql(sql=sql, warehouse_id=warehouse_id,
@@ -586,7 +603,7 @@ with open("config.yaml", "w") as f:
 # MAGIC     sql = f"""
 # MAGIC         UPDATE {cat}.{sch}.billing_disputes
 # MAGIC         SET status = '{new_status}',
-# MAGIC             resolution_notes = '{resolution_notes.replace("'", "''")}',
+# MAGIC             resolution_notes = '{_sanitize_sql_str(resolution_notes)}',
 # MAGIC             updated_at = TIMESTAMP '{now_ts}'
 # MAGIC             {f", resolved_at = TIMESTAMP '{now_ts}'" if is_terminal else ""}
 # MAGIC             {f", resolved_amount_usd = {float(resolved_amount_usd)}" if resolved_amount_usd else ""}
@@ -610,7 +627,7 @@ with open("config.yaml", "w") as f:
 # MAGIC         return "ERROR: warehouse_id not configured."
 # MAGIC
 # MAGIC     from databricks.sdk.service.sql import StatementState
-# MAGIC     w = WorkspaceClient()
+# MAGIC     w = _get_write_client()
 # MAGIC     resp = w.statement_execution.execute_statement(
 # MAGIC         statement=f"""
 # MAGIC             SELECT dispute_id, dispute_type, status, disputed_amount_usd,
@@ -679,22 +696,26 @@ with open("config.yaml", "w") as f:
 # MAGIC         pending = _extract_pending_write(messages)
 # MAGIC
 # MAGIC         if pending is None:
+# MAGIC             # Routing inconsistency — WRITE_PENDING was detected by route_after_tools
+# MAGIC             # but _extract_pending_write couldn't parse it. Route back to agent.
 # MAGIC             return {"messages": []}
 # MAGIC
-# MAGIC         if _user_cancelled(messages):
+# MAGIC         intent = _get_user_intent(messages)
+# MAGIC
+# MAGIC         if intent == "cancel":
 # MAGIC             action_type = pending.get("action_type", "unknown")
 # MAGIC             # Write CANCELLED audit
 # MAGIC             wh = config_.get("warehouse_id", "")
 # MAGIC             if wh:
 # MAGIC                 try:
-# MAGIC                     w_local = WorkspaceClient()
+# MAGIC                     w_local = _get_write_client()
 # MAGIC                     w_local.statement_execution.execute_statement(
 # MAGIC                         statement=f"""INSERT INTO {config_['catalog']}.{config_['schema']}.billing_write_audit
 # MAGIC                         (audit_id, action_type, target_table, target_record_id, customer_id,
 # MAGIC                          agent_session_id, executed_by, payload_json, sql_statement,
 # MAGIC                          result_status, result_message, error_detail, executed_at)
 # MAGIC                         VALUES ('{str(uuid.uuid4())}', '{action_type}', 'N/A', '', NULL, NULL,
-# MAGIC                         'ai_billing_agent', '{json.dumps(pending.get("payload", {})).replace("'", "''")}',
+# MAGIC                         'ai_billing_agent', '{_sanitize_sql_str(json.dumps(pending.get("payload", {})))}',
 # MAGIC                         NULL, 'CANCELLED', 'User cancelled the pending action.', NULL,
 # MAGIC                         TIMESTAMP '{datetime.now(timezone.utc).isoformat()}')""",
 # MAGIC                         warehouse_id=wh, wait_timeout="10s")
@@ -704,13 +725,14 @@ with open("config.yaml", "w") as f:
 # MAGIC                     f"CANCELLED: The pending '{action_type}' action was cancelled. No data was modified.",
 # MAGIC                     "tool_call_id": "cancelled_write"}]}
 # MAGIC
-# MAGIC         if _user_confirmed(messages):
+# MAGIC         if intent == "confirm":
 # MAGIC             return {"messages": [{"role": "tool", "content":
 # MAGIC                     f"CONFIRMED: User approved '{pending.get('action_type')}'. Proceed with execution.",
 # MAGIC                     "tool_call_id": "confirmed_write"}]}
 # MAGIC
+# MAGIC         # intent == "unclear"
 # MAGIC         return {"messages": [{"role": "tool", "content":
-# MAGIC                 f"AWAITING_CONFIRMATION: Reply CONFIRM to proceed or CANCEL to abort.",
+# MAGIC                 "AWAITING_CONFIRMATION: Reply CONFIRM to proceed or CANCEL to abort.",
 # MAGIC                 "tool_call_id": "awaiting_confirmation"}]}
 # MAGIC
 # MAGIC     workflow = StateGraph(ChatAgentState)
@@ -758,6 +780,7 @@ with open("config.yaml", "w") as f:
 # MAGIC agent = create_tool_calling_agent(llm, tools, system_prompt)
 # MAGIC AGENT = LangGraphChatAgent(agent)
 # MAGIC mlflow.models.set_model(AGENT)
+
 
 # COMMAND ----------
 

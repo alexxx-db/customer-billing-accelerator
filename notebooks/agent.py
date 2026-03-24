@@ -50,8 +50,25 @@ system_prompt = config['agent_prompt']
 
 WRITE_PENDING_PREFIX = "WRITE_PENDING"
 
-CONFIRM_PHRASES = {"confirm", "yes", "proceed", "approve", "ok", "go ahead", "do it"}
-CANCEL_PHRASES  = {"cancel", "no", "stop", "abort", "never mind", "don't"}
+CONFIRM_PHRASES = {"confirm", "yes", "proceed", "approve", "go ahead", "do it"}
+CANCEL_PHRASES  = {"cancel", "stop", "abort", "never mind", "don't"}
+
+# Module-level WorkspaceClient for write operations (reused across calls)
+_write_client = None
+
+def _get_write_client():
+    global _write_client
+    if _write_client is None:
+        _write_client = WorkspaceClient()
+    return _write_client
+
+
+def _sanitize_sql_str(val: str) -> str:
+    """Sanitize a string for SQL injection prevention beyond single-quote escaping."""
+    if val is None:
+        return ""
+    # Replace single quotes, backslashes, and null bytes
+    return val.replace("\\", "\\\\").replace("'", "''").replace("\x00", "")
 
 
 def _execute_sql(sql: str, warehouse_id: str, action_type: str,
@@ -61,7 +78,7 @@ def _execute_sql(sql: str, warehouse_id: str, action_type: str,
     Writes two audit records (PENDING before, then SUCCESS/FAILED after) — pure append."""
     from databricks.sdk.service.sql import StatementState
 
-    w = WorkspaceClient()
+    w = _get_write_client()
     audit_id = str(uuid.uuid4())
     executed_at = datetime.now(timezone.utc).isoformat()
     cat = config['catalog']
@@ -80,8 +97,8 @@ def _execute_sql(sql: str, warehouse_id: str, action_type: str,
       {customer_id if customer_id is not None else 'NULL'},
       {f"'{session_id}'" if session_id else 'NULL'},
       'ai_billing_agent',
-      '{json.dumps(payload).replace("'", "''")}',
-      '{sql.replace("'", "''")}',
+      '{_sanitize_sql_str(json.dumps(payload))}',
+      '{_sanitize_sql_str(sql)}',
       'PENDING', 'Audit pre-written before business SQL.', NULL,
       TIMESTAMP '{executed_at}'
     )
@@ -128,7 +145,7 @@ def _execute_sql(sql: str, warehouse_id: str, action_type: str,
                 {customer_id if customer_id is not None else 'NULL'},
                 {f"'{session_id}'" if session_id else 'NULL'},
                 'ai_billing_agent', NULL, NULL, 'FAILED',
-                'Business SQL failed.', '{error[:500].replace("'", "''")}',
+                'Business SQL failed.', '{_sanitize_sql_str(error[:500])}',
                 TIMESTAMP '{datetime.now(timezone.utc).isoformat()}')""",
                 warehouse_id=warehouse_id, wait_timeout="10s")
             return {"success": False, "message": f"Write failed: {error}", "audit_id": audit_id}
@@ -147,20 +164,20 @@ def _extract_pending_write(messages: list[dict]) -> dict | None:
     return None
 
 
-def _user_confirmed(messages: list[dict]) -> bool:
+def _get_user_intent(messages: list[dict]) -> str:
+    """Returns 'confirm', 'cancel', or 'unclear' based on the most recent user message.
+    Cancel takes priority over confirm if both match (safety-first)."""
     for msg in reversed(messages[-2:]):
         if msg.get("role") == "user":
             text = (msg.get("content", "") or "").lower().strip()
-            return any(phrase in text for phrase in CONFIRM_PHRASES)
-    return False
-
-
-def _user_cancelled(messages: list[dict]) -> bool:
-    for msg in reversed(messages[-2:]):
-        if msg.get("role") == "user":
-            text = (msg.get("content", "") or "").lower().strip()
-            return any(phrase in text for phrase in CANCEL_PHRASES)
-    return False
+            has_cancel = any(phrase in text for phrase in CANCEL_PHRASES)
+            has_confirm = any(phrase in text for phrase in CONFIRM_PHRASES)
+            if has_cancel:
+                return "cancel"
+            if has_confirm:
+                return "confirm"
+            return "unclear"
+    return "unclear"
 
 
 ###############################################################################
@@ -292,7 +309,7 @@ def acknowledge_anomaly(anomaly_id: str, reason: str, customer_id: str) -> str:
         UPDATE {cat}.{sch}.billing_anomalies
         SET acknowledged_by = 'ai_billing_agent',
             acknowledged_at = TIMESTAMP '{now_ts}',
-            acknowledgement_reason = '{reason.replace("'", "''")}'
+            acknowledgement_reason = '{_sanitize_sql_str(reason)}'
         WHERE CONCAT(CAST(customer_id AS STRING), '-', event_month, '-', anomaly_type) = '{anomaly_id}'
     """
     result = _execute_sql(sql=sql, warehouse_id=warehouse_id,
@@ -337,7 +354,7 @@ def create_billing_dispute(customer_id: str, dispute_type: str, description: str
         VALUES ('{dispute_id}', {int(customer_id)},
           {f"'{anomaly_id}'" if anomaly_id else 'NULL'},
           {f"'{event_month}'" if event_month else 'NULL'},
-          '{dispute_type}', 'OPEN', '{description.replace("'", "''")}',
+          '{dispute_type}', 'OPEN', '{_sanitize_sql_str(description)}',
           {amount}, 'ai_billing_agent', TIMESTAMP '{now_ts}', TIMESTAMP '{now_ts}')
     """
     result = _execute_sql(sql=sql, warehouse_id=warehouse_id,
@@ -373,7 +390,7 @@ def update_dispute_status(dispute_id: str, new_status: str, resolution_notes: st
     sql = f"""
         UPDATE {cat}.{sch}.billing_disputes
         SET status = '{new_status}',
-            resolution_notes = '{resolution_notes.replace("'", "''")}',
+            resolution_notes = '{_sanitize_sql_str(resolution_notes)}',
             updated_at = TIMESTAMP '{now_ts}'
             {f", resolved_at = TIMESTAMP '{now_ts}'" if is_terminal else ""}
             {f", resolved_amount_usd = {float(resolved_amount_usd)}" if resolved_amount_usd else ""}
@@ -397,7 +414,7 @@ def lookup_dispute_history(customer_id: str) -> str:
         return "ERROR: warehouse_id not configured."
 
     from databricks.sdk.service.sql import StatementState
-    w = WorkspaceClient()
+    w = _get_write_client()
     resp = w.statement_execution.execute_statement(
         statement=f"""
             SELECT dispute_id, dispute_type, status, disputed_amount_usd,
@@ -466,22 +483,26 @@ def create_tool_calling_agent(
         pending = _extract_pending_write(messages)
 
         if pending is None:
+            # Routing inconsistency — WRITE_PENDING was detected by route_after_tools
+            # but _extract_pending_write couldn't parse it. Route back to agent.
             return {"messages": []}
 
-        if _user_cancelled(messages):
+        intent = _get_user_intent(messages)
+
+        if intent == "cancel":
             action_type = pending.get("action_type", "unknown")
             # Write CANCELLED audit
             wh = config_.get("warehouse_id", "")
             if wh:
                 try:
-                    w_local = WorkspaceClient()
+                    w_local = _get_write_client()
                     w_local.statement_execution.execute_statement(
                         statement=f"""INSERT INTO {config_['catalog']}.{config_['schema']}.billing_write_audit
                         (audit_id, action_type, target_table, target_record_id, customer_id,
                          agent_session_id, executed_by, payload_json, sql_statement,
                          result_status, result_message, error_detail, executed_at)
                         VALUES ('{str(uuid.uuid4())}', '{action_type}', 'N/A', '', NULL, NULL,
-                        'ai_billing_agent', '{json.dumps(pending.get("payload", {})).replace("'", "''")}',
+                        'ai_billing_agent', '{_sanitize_sql_str(json.dumps(pending.get("payload", {})))}',
                         NULL, 'CANCELLED', 'User cancelled the pending action.', NULL,
                         TIMESTAMP '{datetime.now(timezone.utc).isoformat()}')""",
                         warehouse_id=wh, wait_timeout="10s")
@@ -491,13 +512,14 @@ def create_tool_calling_agent(
                     f"CANCELLED: The pending '{action_type}' action was cancelled. No data was modified.",
                     "tool_call_id": "cancelled_write"}]}
 
-        if _user_confirmed(messages):
+        if intent == "confirm":
             return {"messages": [{"role": "tool", "content":
                     f"CONFIRMED: User approved '{pending.get('action_type')}'. Proceed with execution.",
                     "tool_call_id": "confirmed_write"}]}
 
+        # intent == "unclear"
         return {"messages": [{"role": "tool", "content":
-                f"AWAITING_CONFIRMATION: Reply CONFIRM to proceed or CANCEL to abort.",
+                "AWAITING_CONFIRMATION: Reply CONFIRM to proceed or CANCEL to abort.",
                 "tool_call_id": "awaiting_confirmation"}]}
 
     workflow = StateGraph(ChatAgentState)

@@ -84,14 +84,14 @@ config['genie_space_description'] = (
     'Natural language analytics over telco billing data. '
     'Includes invoice_analytics with monthly charge breakdowns per customer (roaming, international, data overage, plan info), '
     'billing_plans with plan pricing, data limits, and allowances, '
-    'and billing_anomalies_analytics with detected billing anomalies (charge spikes, roaming spikes, data overages). '
+    'and billing_anomalies with detected billing anomalies (charge spikes, roaming spikes, data overages). '
     'Tables join via plan_name. Invoice has monthly granularity per customer_id. '
     'PII fields (names, emails, phone numbers) are excluded.'
 )
 config['genie_space_tables'] = [
     config['catalog'] + '.' + config['database'] + '.invoice_analytics',
     config['catalog'] + '.' + config['database'] + '.billing_plans',
-    config['catalog'] + '.' + config['database'] + '.billing_anomalies_analytics',
+    config['catalog'] + '.' + config['database'] + '.billing_anomalies',
 ]
 config['genie_space_sample_questions'] = [
     "What is the average monthly total charge across all customers?",

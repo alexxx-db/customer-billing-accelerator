@@ -19,6 +19,7 @@
 # MAGIC |-------|-------------|
 # MAGIC | `invoice_analytics` | PII-safe view of monthly billing aggregates per customer (excludes names, emails, phone numbers) |
 # MAGIC | `billing_plans` | Plan catalog with pricing, data limits, and allowances |
+# MAGIC | `billing_anomalies` | Detected billing anomalies: charge spikes, roaming spikes, data overage spikes (added by notebook 05) |
 # MAGIC
 # MAGIC ---
 # MAGIC
@@ -84,7 +85,8 @@ warehouse_id = config['warehouse_id']
 sample_questions = config['genie_space_sample_questions']
 
 api_base = f"{w.config.host}/api/2.0"
-headers = {"Authorization": f"Bearer {w.config.token}"}
+headers = {}
+w.config.authenticate(headers)
 
 # Check if a Genie Space with this name already exists
 existing_space_id = None

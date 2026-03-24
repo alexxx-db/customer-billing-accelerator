@@ -21,7 +21,7 @@
 
 # DBTITLE 1,Install and Update Required Python Packages
 # Install required packages
-%pip install -U -qqqq mlflow-skinny langchain==0.2.16 langgraph-checkpoint==1.0.12 langchain_core langchain-community==0.2.16 langgraph==0.2.16 pydantic langchain_databricks unitycatalog-langchain unitycatalog-ai
+%pip install -U -qqqq mlflow-skinny langchain==0.2.16 langgraph-checkpoint==1.0.12 langchain_core langchain-community==0.2.16 langgraph==0.3.4 pydantic langchain_databricks unitycatalog-langchain unitycatalog-ai
 dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -95,7 +95,7 @@ spark.sql(f"DROP FUNCTION IF EXISTS {CATALOG}.{SCHEMA}.lookup_billing_items;")
 
 sqlstr_lkp_bill_items  = f"""
 CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.lookup_billing_items(
-  input_id STRING COMMENT 'Input customer id'
+  input_id STRING COMMENT 'Input device_id. Use lookup_customer first to get the device_id for a customer.'
 )
 RETURNS TABLE (
     device_id BIGINT,
@@ -105,7 +105,7 @@ RETURNS TABLE (
     event_ts TIMESTAMP,
     contract_start_dt DATE
 )
-COMMENT 'Returns all billing items information for the customer.You need device_id from the lookup_customer function'
+COMMENT 'Returns all billing items information for a device. Requires device_id obtained from lookup_customer.'
 RETURN (
   SELECT 
     device_id,
@@ -203,7 +203,7 @@ CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.lookup_billing(
 RETURNS TABLE (
     customer_id BIGINT,
     customer_name STRING,
-    event_month DATE,
+    event_month STRING,
     phone_number BIGINT,
     data_charges_outside_allowance DOUBLE,
     roaming_data_charges DOUBLE,
@@ -228,7 +228,7 @@ SELECT
     international_text_charges,
     total_charges
 FROM {CATALOG}.{SCHEMA}.invoice
-WHERE  customer_id = input_customer
+WHERE  customer_id = CAST(input_customer AS DECIMAL)
 ORDER BY event_month DESC;
 """
 spark.sql(sqlstr_lkp_billing)
@@ -268,6 +268,6 @@ CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.billing_faq(question STRING COMMEN
 RETURNS STRING
 LANGUAGE SQL
 COMMENT 'fqa answer' 
-RETURN SELECT string(collect_set(faq)) from vector_search(index => '{CATALOG}.{SCHEMA}.{INDEX_NAME}', query => question, num_results => 1);
+RETURN SELECT concat_ws('\n', collect_list(faq)) from vector_search(index => '{CATALOG}.{SCHEMA}.{INDEX_NAME}', query => question, num_results => 1);
 """
 spark.sql(sqlstr_billing_faq)

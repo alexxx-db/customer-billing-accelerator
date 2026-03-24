@@ -82,11 +82,10 @@ class DatabricksChatbot:
                     'content': assistant_response
                 })
             except Exception as e:
-                error_message = f'Error: {str(e)}'
-                print(error_message)  # Log the error for debugging
+                print(f'Error calling model endpoint: {str(e)}')
                 chat_history.append({
                     'role': 'assistant',
-                    'content': error_message
+                    'content': 'Sorry, something went wrong processing your request. Please try again.'
                 })
 
             chat_display = self._format_chat_display(chat_history)
@@ -104,7 +103,7 @@ class DatabricksChatbot:
                 return [], []
             return dash.no_update, dash.no_update
 
-    def _call_model_endpoint(self, messages, max_tokens=128):
+    def _call_model_endpoint(self, messages, max_tokens=1024):
         try:
             print('Calling model endpoint...')
             return query_endpoint(self.endpoint_name, messages, max_tokens)["content"]

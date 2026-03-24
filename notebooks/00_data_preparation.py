@@ -1,8 +1,4 @@
 # Databricks notebook source
-# MAGIC %run "./000-config"
-
-# COMMAND ----------
-
 # MAGIC %md ##Data Generation for the Demo
 # MAGIC
 # MAGIC For this solution accelerator, we will use data generator. The datasets include:
@@ -49,7 +45,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ./000-config
+# MAGIC %run "./000-config"
 
 # COMMAND ----------
 
@@ -99,25 +95,7 @@ warehouse_id=config['warehouse_id']
 
 # COMMAND ----------
 
-dbutils.fs.mkdirs("dbfs:/Users/alex.barreto@entrada.ai/cme/telco-billing-customer-care/notebooks/data/")
-
-# 1. Define the destination path
-path = "dbfs:/Users/alex.barreto@entrada.ai/cme/telco-billing-customer-care/notebooks/data/billing_plans.json"
-
-# 2. Define the content as a single string
-json_data = """{"Plan_key":1,"Plan_id":"PLAN001","Plan_name":"50GB SIM12","contract_in_months":12,"monthly_charges_dollars":25,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"50","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
-{"Plan_key":2,"Plan_id":"PLAN002","Plan_name":"50GB SIM24","contract_in_months":24,"monthly_charges_dollars":22,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"50","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
-{"Plan_key":3,"Plan_id":"PLAN003","Plan_name":"100GB SIM12","contract_in_months":12,"monthly_charges_dollars":28,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"100","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
-{"Plan_key":4,"Plan_id":"PLAN004","Plan_name":"100GB SIM24","contract_in_months":24,"monthly_charges_dollars":26,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"100","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
-{"Plan_key":5,"Plan_id":"PLAN005","Plan_name":"150GB SIM12","contract_in_months":12,"monthly_charges_dollars":30,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"150","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
-{"Plan_key":6,"Plan_id":"PLAN006","Plan_name":"150GB SIM24","contract_in_months":24,"monthly_charges_dollars":27,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"100","Data_Limit_GB":"150","Data_Outside_Allowance_Per_MB":0.01,"Roam_Data_charges_per_MB":0.1,"Roam_Call_charges_per_min":1.0,"Roam_text_charges":0.6,"International_call_charge_per_min":0.7,"International_text_charge":0.5}
-{"Plan_key":7,"Plan_id":"PLAN007","Plan_name":"UNLIMITED SIM12","contract_in_months":12,"monthly_charges_dollars":35,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"UNLIMITED","Data_Limit_GB":"UNLIMITED","Data_Outside_Allowance_Per_MB":0.0,"Roam_Data_charges_per_MB":0.08,"Roam_Call_charges_per_min":0.8,"Roam_text_charges":0.5,"International_call_charge_per_min":0.6,"International_text_charge":0.4}
-{"Plan_key":8,"Plan_id":"PLAN008","Plan_name":"UNLIMITED SIM24","contract_in_months":24,"monthly_charges_dollars":32,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"UNLIMITED","Data_Limit_GB":"UNLIMITED","Data_Outside_Allowance_Per_MB":0.0,"Roam_Data_charges_per_MB":0.08,"Roam_Call_charges_per_min":0.8,"Roam_text_charges":0.5,"International_call_charge_per_min":0.6,"International_text_charge":0.4}
-{"Plan_key":9,"Plan_id":"PLAN009","Plan_name":"UNLIMITED WORLD SIM12","contract_in_months":12,"monthly_charges_dollars":42,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"UNLIMITED","Data_Limit_GB":"UNLIMITED","Data_Outside_Allowance_Per_MB":0.0,"Roam_Data_charges_per_MB":0.0,"Roam_Call_charges_per_min":0.0,"Roam_text_charges":0.0,"International_call_charge_per_min":0.0,"International_text_charge":0.0}
-{"Plan_key":10,"Plan_id":"PLAN010","Plan_name":"UNLIMITED WORLD SIM24","contract_in_months":24,"monthly_charges_dollars":38,"Calls_Text":"UNLIMITED","Internet_Speed_MBPS":"UNLIMITED","Data_Limit_GB":"UNLIMITED","Data_Outside_Allowance_Per_MB":0.0,"Roam_Data_charges_per_MB":0.0,"Roam_Call_charges_per_min":0.0,"Roam_text_charges":0.0,"International_call_charge_per_min":0.0,"International_text_charge":0.0}"""
-
-# 3. Write to DBFS (True allows overwriting if the file already exists)
-dbutils.fs.put(path, json_data, True)
+# Use the billing_plans.json file located in the notebook-relative data/ directory
 
 # COMMAND ----------
 
@@ -167,10 +145,6 @@ display(df_plans)
 # MAGIC
 # MAGIC Device is used as the the foreign key. For more details around the data generation, please refer Databricks Labs project.
 # MAGIC
-
-# COMMAND ----------
-
-# MAGIC %pip install dbldatagen
 
 # COMMAND ----------
 
@@ -340,8 +314,8 @@ df_enriched_events.createOrReplaceTempView("telephony_events")
 
 df_summary = spark.sql("""select device_id, 
                                  concat(extract(year FROM event_ts),"-",lpad(extract(month FROM event_ts),2,'0')) as event_month,
-                                 round(sum(data_local) / (1028*1028), 3) as data_local_mb, 
-                                 round(sum(data_roaming) / (1028*1028), 3) as data_roaming_mb, 
+                                 round(sum(data_local) / (1024*1024), 3) as data_local_mb, 
+                                 round(sum(data_roaming) / (1024*1024), 3) as data_roaming_mb, 
                                  sum(texts_roaming) as texts_roaming,
                                  sum(texts_international) as texts_international,
                                  sum(call_mins_roaming) as call_mins_roaming,
@@ -400,8 +374,8 @@ df_invoices = spark.sql(
        case 
            when Data_Limit_GB != 'UNLIMITED' 
            then case 
-                    when (data_local_mb - cast(Data_Limit_GB as double) * 1028) > 0
-                    then cast((data_local_mb - cast(Data_Limit_GB as double) * 1028) * Data_Outside_Allowance_Per_MB as decimal(18,2))   
+                    when (data_local_mb - cast(Data_Limit_GB as double) * 1024) > 0
+                    then cast((data_local_mb - cast(Data_Limit_GB as double) * 1024) * Data_Outside_Allowance_Per_MB as decimal(18,2))   
                     else 0 
                 end
            else 0 
@@ -441,42 +415,6 @@ from customer_summary
 
 # Write the DataFrame to a Delta table
 df_invoices.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{catalog}.{db}.invoice")
-
-# COMMAND ----------
-
-ui_functions_path=config['catalog']+"."+config['database']
-print(ui_functions_path)
-
-# COMMAND ----------
-
-content = f"""
-agent_prompt: |
-  You are a Billing Support Agent assisting users with billing inquiries.
-
-  Guidelines:
-  - First, check FAQ Search before requesting any details.
-  - If an FAQ answer exists, return it immediately.
-  - If no FAQ match, request the customer_id before retrieving billing details.
-  - Do not disclose confidential information like names, emails, device_id.
-
-  Process:
-  1. Run FAQ Search -> If an answer exists, return it.
-  2. If no FAQ match, ask for the customer_id and use the relevant tool(s) to fetch billing details.
-  3. If missing details (e.g., timeframe), ask clarifying questions.
-
-  Keep responses polite, professional, and concise.
-
-llm_endpoint: "{llm_endpoint}"
-warehouse_id: "{warehouse_id}"
-vector_search_index: "{ui_functions_path}.faq_index"
-uc_functions:
-  - "{ui_functions_path}.*"
-"""
-
-# COMMAND ----------
-
-with open('config.yml', "w") as f:
-    f.write(content)
 
 # COMMAND ----------
 

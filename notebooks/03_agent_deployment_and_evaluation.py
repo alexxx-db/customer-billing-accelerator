@@ -85,7 +85,8 @@ Guidelines:
 - First, check FAQ Search before requesting any details.
 - If an FAQ answer exists, return it immediately.
 - If no FAQ match, request the customer_id before retrieving billing details.
-- Do not disclose confidential information like names, emails, device_id.
+- NEVER disclose confidential information in your responses, including: customer_name, email, device_id, or phone_number. These fields are for internal lookup only.
+- If a user asks for confidential fields, politely decline and explain that you cannot share that information.
 
 Process:
 1. Run FAQ Search -> If an answer exists, return it.
@@ -229,20 +230,17 @@ with open("config.yaml", "w") as f:
 # MAGIC         else:
 # MAGIC             return "end"
 # MAGIC
-# MAGIC     if system_prompt:
-# MAGIC         preprocessor = RunnableLambda(
-# MAGIC             lambda state: [{"role": "system", "content": system_prompt}]
-# MAGIC             + state["messages"]
-# MAGIC         )
-# MAGIC     else:
-# MAGIC         preprocessor = RunnableLambda(lambda state: state["messages"])
-# MAGIC     model_runnable = preprocessor | model
+# MAGIC     system_message = [{"role": "system", "content": system_prompt}] if system_prompt else []
 # MAGIC
 # MAGIC     def call_model(
 # MAGIC         state: ChatAgentState,
 # MAGIC         config: RunnableConfig,
 # MAGIC     ):
-# MAGIC         response = model_runnable.invoke(state, config)
+# MAGIC         messages = state["messages"]
+# MAGIC         # Only prepend system prompt if not already present
+# MAGIC         if system_message and (not messages or messages[0].get("role") != "system"):
+# MAGIC             messages = system_message + messages
+# MAGIC         response = model.invoke(messages, config)
 # MAGIC
 # MAGIC         return {"messages": [response]}
 # MAGIC
@@ -262,7 +260,7 @@ with open("config.yaml", "w") as f:
 # MAGIC     )
 # MAGIC     workflow.add_edge("tools", "agent")
 # MAGIC
-# MAGIC     return workflow.compile()
+# MAGIC     return workflow.compile(recursion_limit=25)
 # MAGIC
 # MAGIC
 # MAGIC class LangGraphChatAgent(ChatAgent):
@@ -452,7 +450,7 @@ import mlflow
 from mlflow.genai.scorers import RelevanceToQuery, Safety, RetrievalRelevance, RetrievalGroundedness
 
 eval_results = mlflow.genai.evaluate(
-    data=evals.head(),
+    data=evals,
     predict_fn=lambda messages: AGENT.predict({"messages": messages}),
     scorers=[RelevanceToQuery(), Safety()], # add more scorers here if they're applicable
 )

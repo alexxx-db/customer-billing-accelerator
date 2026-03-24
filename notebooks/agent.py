@@ -84,20 +84,17 @@ def create_tool_calling_agent(
         else:
             return "end"
 
-    if system_prompt:
-        preprocessor = RunnableLambda(
-            lambda state: [{"role": "system", "content": system_prompt}]
-            + state["messages"]
-        )
-    else:
-        preprocessor = RunnableLambda(lambda state: state["messages"])
-    model_runnable = preprocessor | model
+    system_message = [{"role": "system", "content": system_prompt}] if system_prompt else []
 
     def call_model(
         state: ChatAgentState,
         config: RunnableConfig,
     ):
-        response = model_runnable.invoke(state, config)
+        messages = state["messages"]
+        # Only prepend system prompt if not already present
+        if system_message and (not messages or messages[0].get("role") != "system"):
+            messages = system_message + messages
+        response = model.invoke(messages, config)
 
         return {"messages": [response]}
 
@@ -117,7 +114,7 @@ def create_tool_calling_agent(
     )
     workflow.add_edge("tools", "agent")
 
-    return workflow.compile()
+    return workflow.compile(recursion_limit=25)
 
 
 class LangGraphChatAgent(ChatAgent):

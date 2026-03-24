@@ -255,7 +255,14 @@ with open("config.yaml", "w") as f:
 # MAGIC # Define your LLM endpoint and system prompt
 # MAGIC ############################################
 # MAGIC llm = ChatDatabricks(endpoint=config['llm_endpoint'])
-# MAGIC system_prompt = config['agent_prompt']
+# MAGIC
+# MAGIC # Inject domain-aware context into the system prompt
+# MAGIC _base_prompt = config.get('agent_prompt', '')
+# MAGIC _domain_section = config.get('domain_agent_prompt_section', '')
+# MAGIC if _domain_section and _domain_section.strip() not in _base_prompt:
+# MAGIC     system_prompt = _base_prompt + "\n" + _domain_section
+# MAGIC else:
+# MAGIC     system_prompt = _base_prompt
 # MAGIC
 # MAGIC ###############################################################################
 # MAGIC ## Write-Back Infrastructure

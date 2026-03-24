@@ -1,0 +1,97 @@
+domain:
+  name: telco
+  display_name: "Telecommunications"
+  industry: "Telecommunications"
+  description: >
+    Monthly billing for telecom subscribers. Charges include base plan fee, data
+    overage, roaming (data, calls, texts), and international (calls, texts).
+
+agent:
+  role_name: "Billing Support Agent"
+  customer_noun: "subscriber"
+  account_noun: "account"
+  service_noun: "plan"
+  charge_vocabulary:
+    overage: "data overage"
+    premium_1: "roaming"
+    premium_2: "international"
+
+tables:
+  billing_summary:
+    source_table: "invoice"
+    customer_id_col: "customer_id"
+    event_month_col: "event_month"
+    base_charge_col: "monthly_charges"
+    total_charges_col: "total_charges"
+    plan_name_col: "plan_name"
+    charge_mappings:
+      charge_category_1:
+        source_col: "data_charges_outside_allowance"
+        label: "Data Overage"
+      charge_category_2:
+        source_col: "roaming_data_charges"
+        label: "Roaming Data"
+      charge_category_3:
+        source_col: "roaming_call_charges"
+        label: "Roaming Calls"
+      charge_category_4:
+        source_col: "roaming_text_charges"
+        label: "Roaming Texts"
+      charge_category_5:
+        source_col: "international_call_charges"
+        label: "International Calls"
+      charge_category_6:
+        source_col: "international_text_charges"
+        label: "International Texts"
+
+  customer_profile:
+    source_table: "customers"
+    customer_id_col: "customer_id"
+    customer_name_col: "customer_name"
+    account_identifier_col: "phone_number"
+    product_identifier_col: "device_id"
+    plan_key_col: "plan"
+    subscription_start_col: "contract_start_dt"
+
+  service_catalog:
+    source_table: "billing_plans"
+    plan_key_col: "Plan_key"
+    plan_id_col: "Plan_id"
+    plan_name_col: "Plan_name"
+    contract_months_col: "contract_in_months"
+    base_charge_col: "monthly_charges_dollars"
+    feature_1_label: "Calls & Text"
+    feature_1_col: "Calls_Text"
+    feature_2_label: "Data Limit (GB)"
+    feature_2_col: "Data_Limit_GB"
+    overage_rate_col: "Data_Outside_Allowance_Per_MB"
+    premium_rate_1_col: "Roam_Data_charges_per_MB"
+    premium_rate_2_col: "International_call_charge_per_min"
+
+  billing_events:
+    source_table: "billing_items"
+    product_identifier_col: "device_id"
+    event_category_col: "event_type"
+    usage_quantity_col: "minutes"
+    data_quantity_col: "bytes_transferred"
+    event_ts_col: "event_ts"
+    subscription_start_col: "contract_start_dt"
+
+confidential_fields:
+  - "customer_name"
+  - "email"
+  - "account_identifier"
+  - "product_identifier"
+
+genie_space:
+  description: >
+    Monthly billing analytics for telecom subscribers. Includes invoice summaries
+    (base plan + roaming + international + data overage charges), subscriber profiles
+    (plan, contract start date), and plan catalog (pricing, data limits, roaming rates).
+    Tables join on plan_key. Invoice has monthly granularity per subscriber.
+  sample_questions:
+    - "What is the average monthly total charge across all subscribers?"
+    - "Which plan has the highest average roaming charges?"
+    - "How many subscribers are on each plan?"
+    - "What are the top 10 subscribers by total charges last 3 months?"
+    - "What is the month-over-month trend in international call charges?"

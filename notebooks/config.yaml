@@ -20,6 +20,15 @@ disputes_table: cme_demos_alex_barreto.telco_billing_db.billing_disputes
 write_audit_table: cme_demos_alex_barreto.telco_billing_db.billing_write_audit
 tools_open_disputes: cme_demos_alex_barreto.telco_billing_db.lookup_open_disputes
 tools_write_audit: cme_demos_alex_barreto.telco_billing_db.lookup_write_audit
+active_domain: telco
+domain_display_name: Telecommunications
+domain_industry: Telecommunications
+domain_charge_labels: {}
+domain_agent_prompt_section: ''
+v_billing_summary: cme_demos_alex_barreto.telco_billing_db.v_billing_summary
+v_customer_profile: cme_demos_alex_barreto.telco_billing_db.v_customer_profile
+v_service_catalog: cme_demos_alex_barreto.telco_billing_db.v_service_catalog
+v_billing_events: cme_demos_alex_barreto.telco_billing_db.v_billing_events
 erp_connection_host: ''
 erp_connection_port: '5432'
 erp_connection_user: ''

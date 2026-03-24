@@ -113,6 +113,17 @@ config['erp_foreign_catalog'] = ''
 # Write-back (Gap #6)
 config['disputes_table'] = config['catalog']+'.'+config['database']+'.billing_disputes'
 config['write_audit_table'] = config['catalog']+'.'+config['database']+'.billing_write_audit'
+# Domain abstraction (Gap #7)
+config['active_domain'] = 'telco'
+config['domain_display_name'] = 'Telecommunications'
+config['domain_industry'] = 'Telecommunications'
+config['domain_charge_labels'] = {}
+config['domain_agent_prompt_section'] = ''
+config['v_billing_summary'] = config['catalog']+'.'+config['database']+'.v_billing_summary'
+config['v_customer_profile'] = config['catalog']+'.'+config['database']+'.v_customer_profile'
+config['v_service_catalog'] = config['catalog']+'.'+config['database']+'.v_service_catalog'
+config['v_billing_events'] = config['catalog']+'.'+config['database']+'.v_billing_events'
+
 config['tools_open_disputes'] = config['catalog']+'.'+config['database']+'.lookup_open_disputes'
 config['tools_write_audit'] = config['catalog']+'.'+config['database']+'.lookup_write_audit'
 
@@ -161,6 +172,10 @@ config['genie_space_tables'] = [
     # Write-back tables (Gap #6)
     config['catalog'] + '.' + config['database'] + '.billing_disputes',
     config['catalog'] + '.' + config['database'] + '.billing_write_audit',
+    # Canonical views (universal across all domains)
+    config['catalog'] + '.' + config['database'] + '.v_billing_summary',
+    config['catalog'] + '.' + config['database'] + '.v_customer_profile',
+    config['catalog'] + '.' + config['database'] + '.v_service_catalog',
 ]
 config['genie_space_sample_questions'] = [
     "What is the average monthly total charge across all customers?",

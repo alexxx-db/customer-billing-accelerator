@@ -20,6 +20,9 @@ disputes_table: cme_demos_alex_barreto.telco_billing_db.billing_disputes
 write_audit_table: cme_demos_alex_barreto.telco_billing_db.billing_write_audit
 tools_open_disputes: cme_demos_alex_barreto.telco_billing_db.lookup_open_disputes
 tools_write_audit: cme_demos_alex_barreto.telco_billing_db.lookup_write_audit
+default_persona: customer_care
+persona_config_path: ''
+personas: {}
 active_domain: telco
 domain_display_name: Telecommunications
 domain_industry: Telecommunications

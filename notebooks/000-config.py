@@ -124,6 +124,11 @@ config['v_customer_profile'] = config['catalog']+'.'+config['database']+'.v_cust
 config['v_service_catalog'] = config['catalog']+'.'+config['database']+'.v_service_catalog'
 config['v_billing_events'] = config['catalog']+'.'+config['database']+'.v_billing_events'
 
+# Multi-persona (Gap #8)
+config['default_persona'] = 'customer_care'
+config['persona_config_path'] = ''
+config['personas'] = {}
+
 config['tools_open_disputes'] = config['catalog']+'.'+config['database']+'.lookup_open_disputes'
 config['tools_write_audit'] = config['catalog']+'.'+config['database']+'.lookup_write_audit'
 

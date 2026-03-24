@@ -256,13 +256,69 @@ with open("config.yaml", "w") as f:
 # MAGIC ############################################
 # MAGIC llm = ChatDatabricks(endpoint=config['llm_endpoint'])
 # MAGIC
-# MAGIC # Inject domain-aware context into the system prompt
+# MAGIC # Inject domain-aware context into the base system prompt
 # MAGIC _base_prompt = config.get('agent_prompt', '')
 # MAGIC _domain_section = config.get('domain_agent_prompt_section', '')
 # MAGIC if _domain_section and _domain_section.strip() not in _base_prompt:
 # MAGIC     system_prompt = _base_prompt + "\n" + _domain_section
 # MAGIC else:
 # MAGIC     system_prompt = _base_prompt
+# MAGIC
+# MAGIC ###############################################################################
+# MAGIC ## Persona Configuration
+# MAGIC ###############################################################################
+# MAGIC import os as _os
+# MAGIC import yaml as _yaml
+# MAGIC from pathlib import Path as _Path
+# MAGIC
+# MAGIC _PERSONA_PROMPTS: dict[str, str] = {}
+# MAGIC _PERSONA_TOOLS: dict[str, list[str]] = {}
+# MAGIC _PERSONA_AGENTS: dict[str, CompiledGraph] = {}
+# MAGIC
+# MAGIC
+# MAGIC def _load_personas() -> None:
+# MAGIC     """Load persona configs from personas/ directory."""
+# MAGIC     agent_dir = _Path(__file__).parent if "__file__" in dir() else _Path(".")
+# MAGIC     personas_dir = agent_dir / "personas"
+# MAGIC
+# MAGIC     if not personas_dir.exists():
+# MAGIC         cfg_path = config.get("persona_config_path", "")
+# MAGIC         if cfg_path:
+# MAGIC             personas_dir = _Path(cfg_path)
+# MAGIC
+# MAGIC     if not personas_dir.exists():
+# MAGIC         model_path = _os.environ.get("MLFLOW_MODEL_URI", "")
+# MAGIC         if model_path:
+# MAGIC             personas_dir = _Path(model_path) / "artifacts" / "personas"
+# MAGIC
+# MAGIC     for name in ["customer_care", "finance_ops", "executive", "technical"]:
+# MAGIC         yaml_path = personas_dir / f"{name}.yaml"
+# MAGIC         if yaml_path.exists():
+# MAGIC             try:
+# MAGIC                 with open(yaml_path) as f:
+# MAGIC                     p = _yaml.safe_load(f)
+# MAGIC                 _PERSONA_PROMPTS[name] = p.get("system_prompt", "")
+# MAGIC                 _PERSONA_TOOLS[name] = p.get("tool_policy", {}).get("allowed_tools", [])
+# MAGIC             except Exception as e:
+# MAGIC                 print(f"WARNING: Could not load persona {name}: {e}")
+# MAGIC
+# MAGIC     if not _PERSONA_PROMPTS:
+# MAGIC         _PERSONA_PROMPTS["customer_care"] = system_prompt
+# MAGIC
+# MAGIC
+# MAGIC _load_personas()
+# MAGIC DEFAULT_PERSONA = config.get("default_persona", "customer_care")
+# MAGIC
+# MAGIC
+# MAGIC def _tool_name(t) -> str:
+# MAGIC     """Extract string name from a tool object."""
+# MAGIC     if hasattr(t, "name"):
+# MAGIC         return t.name
+# MAGIC     if hasattr(t, "__name__"):
+# MAGIC         return t.__name__
+# MAGIC     if hasattr(t, "uc_function_name"):
+# MAGIC         return t.uc_function_name.split(".")[-1]
+# MAGIC     return str(t)
 # MAGIC
 # MAGIC ###############################################################################
 # MAGIC ## Write-Back Infrastructure
@@ -762,23 +818,47 @@ with open("config.yaml", "w") as f:
 # MAGIC     def __init__(self, agent: CompiledStateGraph):
 # MAGIC         self.agent = agent
 # MAGIC
+# MAGIC     def _get_persona_agent(self, persona_name: str) -> CompiledGraph:
+# MAGIC         """Get or build a cached agent for the given persona."""
+# MAGIC         if persona_name not in _PERSONA_AGENTS:
+# MAGIC             active_prompt = _PERSONA_PROMPTS.get(persona_name, system_prompt)
+# MAGIC             allowed = _PERSONA_TOOLS.get(persona_name, [])
+# MAGIC             active_tools = [t for t in tools if _tool_name(t) in allowed] if allowed else tools
+# MAGIC             _PERSONA_AGENTS[persona_name] = create_tool_calling_agent(
+# MAGIC                 llm, active_tools, active_prompt)
+# MAGIC         return _PERSONA_AGENTS[persona_name]
+# MAGIC
 # MAGIC     def predict(self, messages: list[ChatAgentMessage],
 # MAGIC                 context: Optional[ChatContext] = None,
 # MAGIC                 custom_inputs: Optional[dict[str, Any]] = None) -> ChatAgentResponse:
+# MAGIC         custom_inputs = custom_inputs or {}
+# MAGIC         persona_name = custom_inputs.get("persona", DEFAULT_PERSONA)
+# MAGIC         if persona_name not in _PERSONA_PROMPTS:
+# MAGIC             persona_name = DEFAULT_PERSONA
+# MAGIC
+# MAGIC         persona_agent = self._get_persona_agent(persona_name)
+# MAGIC
 # MAGIC         request = {"messages": self._convert_messages_to_dict(messages)}
-# MAGIC         messages = []
-# MAGIC         for event in self.agent.stream(request, stream_mode="updates"):
+# MAGIC         out_messages = []
+# MAGIC         for event in persona_agent.stream(request, stream_mode="updates"):
 # MAGIC             for node_data in event.values():
-# MAGIC                 messages.extend(
+# MAGIC                 out_messages.extend(
 # MAGIC                     ChatAgentMessage(**msg) for msg in node_data.get("messages", []))
-# MAGIC         return ChatAgentResponse(messages=messages)
+# MAGIC         return ChatAgentResponse(messages=out_messages)
 # MAGIC
 # MAGIC     def predict_stream(self, messages: list[ChatAgentMessage],
 # MAGIC                        context: Optional[ChatContext] = None,
 # MAGIC                        custom_inputs: Optional[dict[str, Any]] = None
 # MAGIC                        ) -> Generator[ChatAgentChunk, None, None]:
+# MAGIC         custom_inputs = custom_inputs or {}
+# MAGIC         persona_name = custom_inputs.get("persona", DEFAULT_PERSONA)
+# MAGIC         if persona_name not in _PERSONA_PROMPTS:
+# MAGIC             persona_name = DEFAULT_PERSONA
+# MAGIC
+# MAGIC         persona_agent = self._get_persona_agent(persona_name)
+# MAGIC
 # MAGIC         request = {"messages": self._convert_messages_to_dict(messages)}
-# MAGIC         for event in self.agent.stream(request, stream_mode="updates"):
+# MAGIC         for event in persona_agent.stream(request, stream_mode="updates"):
 # MAGIC             for node_data in event.values():
 # MAGIC                 yield from (
 # MAGIC                     ChatAgentChunk(**{"delta": msg}) for msg in node_data.get("messages", []))

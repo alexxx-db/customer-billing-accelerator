@@ -43,13 +43,69 @@ config = ModelConfig(development_config="config.yaml").to_dict()
 ############################################
 llm = ChatDatabricks(endpoint=config['llm_endpoint'])
 
-# Inject domain-aware context into the system prompt
+# Inject domain-aware context into the base system prompt
 _base_prompt = config.get('agent_prompt', '')
 _domain_section = config.get('domain_agent_prompt_section', '')
 if _domain_section and _domain_section.strip() not in _base_prompt:
     system_prompt = _base_prompt + "\n" + _domain_section
 else:
     system_prompt = _base_prompt
+
+###############################################################################
+## Persona Configuration
+###############################################################################
+import os as _os
+import yaml as _yaml
+from pathlib import Path as _Path
+
+_PERSONA_PROMPTS: dict[str, str] = {}
+_PERSONA_TOOLS: dict[str, list[str]] = {}
+_PERSONA_AGENTS: dict[str, CompiledGraph] = {}
+
+
+def _load_personas() -> None:
+    """Load persona configs from personas/ directory."""
+    agent_dir = _Path(__file__).parent if "__file__" in dir() else _Path(".")
+    personas_dir = agent_dir / "personas"
+
+    if not personas_dir.exists():
+        cfg_path = config.get("persona_config_path", "")
+        if cfg_path:
+            personas_dir = _Path(cfg_path)
+
+    if not personas_dir.exists():
+        model_path = _os.environ.get("MLFLOW_MODEL_URI", "")
+        if model_path:
+            personas_dir = _Path(model_path) / "artifacts" / "personas"
+
+    for name in ["customer_care", "finance_ops", "executive", "technical"]:
+        yaml_path = personas_dir / f"{name}.yaml"
+        if yaml_path.exists():
+            try:
+                with open(yaml_path) as f:
+                    p = _yaml.safe_load(f)
+                _PERSONA_PROMPTS[name] = p.get("system_prompt", "")
+                _PERSONA_TOOLS[name] = p.get("tool_policy", {}).get("allowed_tools", [])
+            except Exception as e:
+                print(f"WARNING: Could not load persona {name}: {e}")
+
+    if not _PERSONA_PROMPTS:
+        _PERSONA_PROMPTS["customer_care"] = system_prompt
+
+
+_load_personas()
+DEFAULT_PERSONA = config.get("default_persona", "customer_care")
+
+
+def _tool_name(t) -> str:
+    """Extract string name from a tool object."""
+    if hasattr(t, "name"):
+        return t.name
+    if hasattr(t, "__name__"):
+        return t.__name__
+    if hasattr(t, "uc_function_name"):
+        return t.uc_function_name.split(".")[-1]
+    return str(t)
 
 ###############################################################################
 ## Write-Back Infrastructure
@@ -549,23 +605,47 @@ class LangGraphChatAgent(ChatAgent):
     def __init__(self, agent: CompiledStateGraph):
         self.agent = agent
 
+    def _get_persona_agent(self, persona_name: str) -> CompiledGraph:
+        """Get or build a cached agent for the given persona."""
+        if persona_name not in _PERSONA_AGENTS:
+            active_prompt = _PERSONA_PROMPTS.get(persona_name, system_prompt)
+            allowed = _PERSONA_TOOLS.get(persona_name, [])
+            active_tools = [t for t in tools if _tool_name(t) in allowed] if allowed else tools
+            _PERSONA_AGENTS[persona_name] = create_tool_calling_agent(
+                llm, active_tools, active_prompt)
+        return _PERSONA_AGENTS[persona_name]
+
     def predict(self, messages: list[ChatAgentMessage],
                 context: Optional[ChatContext] = None,
                 custom_inputs: Optional[dict[str, Any]] = None) -> ChatAgentResponse:
+        custom_inputs = custom_inputs or {}
+        persona_name = custom_inputs.get("persona", DEFAULT_PERSONA)
+        if persona_name not in _PERSONA_PROMPTS:
+            persona_name = DEFAULT_PERSONA
+
+        persona_agent = self._get_persona_agent(persona_name)
+
         request = {"messages": self._convert_messages_to_dict(messages)}
-        messages = []
-        for event in self.agent.stream(request, stream_mode="updates"):
+        out_messages = []
+        for event in persona_agent.stream(request, stream_mode="updates"):
             for node_data in event.values():
-                messages.extend(
+                out_messages.extend(
                     ChatAgentMessage(**msg) for msg in node_data.get("messages", []))
-        return ChatAgentResponse(messages=messages)
+        return ChatAgentResponse(messages=out_messages)
 
     def predict_stream(self, messages: list[ChatAgentMessage],
                        context: Optional[ChatContext] = None,
                        custom_inputs: Optional[dict[str, Any]] = None
                        ) -> Generator[ChatAgentChunk, None, None]:
+        custom_inputs = custom_inputs or {}
+        persona_name = custom_inputs.get("persona", DEFAULT_PERSONA)
+        if persona_name not in _PERSONA_PROMPTS:
+            persona_name = DEFAULT_PERSONA
+
+        persona_agent = self._get_persona_agent(persona_name)
+
         request = {"messages": self._convert_messages_to_dict(messages)}
-        for event in self.agent.stream(request, stream_mode="updates"):
+        for event in persona_agent.stream(request, stream_mode="updates"):
             for node_data in event.values():
                 yield from (
                     ChatAgentChunk(**{"delta": msg}) for msg in node_data.get("messages", []))

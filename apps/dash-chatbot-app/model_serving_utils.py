@@ -1,10 +1,16 @@
 from mlflow.deployments import get_deploy_client
 
-def _query_endpoint(endpoint_name: str, messages: list[dict[str, str]], max_tokens) -> list[dict[str, str]]:
-    """Calls a model serving endpoint."""
+
+def _query_endpoint(endpoint_name: str, messages: list[dict[str, str]],
+                    max_tokens: int, persona: str = "customer_care") -> list[dict[str, str]]:
+    """Calls a model serving endpoint with persona context via custom_inputs."""
     res = get_deploy_client('databricks').predict(
         endpoint=endpoint_name,
-        inputs={'messages': messages, "max_tokens": max_tokens},
+        inputs={
+            'messages': messages,
+            "max_tokens": max_tokens,
+            "custom_inputs": {"persona": persona},
+        },
     )
     if "messages" in res:
         return res["messages"]
@@ -16,5 +22,6 @@ def _query_endpoint(endpoint_name: str, messages: list[dict[str, str]], max_toke
         "2) Databricks agent serving endpoints that implement the conversational agent schema."
     )
 
-def query_endpoint(endpoint_name, messages, max_tokens):
-    return _query_endpoint(endpoint_name, messages, max_tokens)[-1]
+
+def query_endpoint(endpoint_name, messages, max_tokens, persona="customer_care"):
+    return _query_endpoint(endpoint_name, messages, max_tokens, persona=persona)[-1]

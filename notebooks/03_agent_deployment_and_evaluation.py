@@ -117,6 +117,18 @@ Guidelines:
   use get_finance_operations_summary.
 - ERP data may have a 24-hour lag. Revenue variance < 10% is normal timing difference.
 
+Write-Back Operations (require explicit user confirmation):
+- You CAN acknowledge billing anomalies, create billing disputes, and update
+  dispute statuses. These are write operations — they modify data permanently.
+- ALWAYS call request_write_confirmation BEFORE any write operation. This stages
+  the action and asks the user to confirm. Do not call acknowledge_anomaly,
+  create_billing_dispute, or update_dispute_status directly without staging first.
+- After staging, explain what will happen and ask the user to reply CONFIRM or CANCEL.
+- When acknowledging an anomaly, always provide a reason.
+- To check existing disputes, use lookup_dispute_history (in-agent) or
+  lookup_open_disputes (UC function).
+- Never acknowledge anomalies in bulk. Handle one at a time.
+
 Process:
 1. Run FAQ Search -> If an answer exists, return it.
 2. If no FAQ match, ask for the customer_id and use the relevant tool(s) to fetch billing details.
@@ -125,7 +137,8 @@ Process:
 5. When asked about monitoring status or what's new, use get_monitoring_status.
 6. For platform health or cost questions, use lookup_operational_kpis or lookup_job_reliability.
 7. For ERP/finance questions, use lookup_customer_erp_profile, lookup_revenue_attribution, or get_finance_operations_summary.
-8. If missing details (e.g., timeframe), ask clarifying questions.
+8. For write operations (acknowledge, dispute, escalate), use request_write_confirmation first, then execute after user confirms.
+9. If missing details (e.g., timeframe), ask clarifying questions.
 
 Keep responses polite, professional, and concise.
 """
@@ -150,6 +163,8 @@ tools_job_reliability = config['tools_job_reliability']
 tools_customer_erp_profile = config['tools_customer_erp_profile']
 tools_revenue_attribution = config['tools_revenue_attribution']
 tools_finance_ops_summary = config['tools_finance_ops_summary']
+tools_open_disputes = config['tools_open_disputes']
+tools_write_audit = config['tools_write_audit']
 agent_name = config['agent_name']
 genie_space_id = config.get('genie_space_id', '') or ''
 agent_prompt = LiteralString(system_prompt)
@@ -175,6 +190,8 @@ yaml_data = {
     "tools_customer_erp_profile": tools_customer_erp_profile,
     "tools_revenue_attribution": tools_revenue_attribution,
     "tools_finance_ops_summary": tools_finance_ops_summary,
+    "tools_open_disputes": tools_open_disputes,
+    "tools_write_audit": tools_write_audit,
     "agent_name": agent_name,
     "genie_space_id": genie_space_id,
     "agent_prompt": agent_prompt
@@ -196,6 +213,9 @@ with open("config.yaml", "w") as f:
 # MAGIC %%writefile agent.py
 # MAGIC from typing import Any, Generator, Optional, Sequence, Union
 # MAGIC import time
+# MAGIC import json
+# MAGIC import uuid
+# MAGIC from datetime import datetime, timezone
 # MAGIC
 # MAGIC import mlflow
 # MAGIC from databricks.sdk import WorkspaceClient
@@ -238,17 +258,133 @@ with open("config.yaml", "w") as f:
 # MAGIC system_prompt = config['agent_prompt']
 # MAGIC
 # MAGIC ###############################################################################
-# MAGIC ## Define tools for your agent, enabling it to retrieve data or take actions
-# MAGIC ## beyond text generation
-# MAGIC ## To create and see usage examples of more tools, see
-# MAGIC ## https://learn.microsoft.com/azure/databricks/generative-ai/agent-framework/agent-tool
+# MAGIC ## Write-Back Infrastructure
+# MAGIC ###############################################################################
+# MAGIC
+# MAGIC WRITE_PENDING_PREFIX = "WRITE_PENDING"
+# MAGIC
+# MAGIC CONFIRM_PHRASES = {"confirm", "yes", "proceed", "approve", "ok", "go ahead", "do it"}
+# MAGIC CANCEL_PHRASES  = {"cancel", "no", "stop", "abort", "never mind", "don't"}
+# MAGIC
+# MAGIC
+# MAGIC def _execute_sql(sql: str, warehouse_id: str, action_type: str,
+# MAGIC                  payload: dict, customer_id: int | None,
+# MAGIC                  session_id: str | None) -> dict:
+# MAGIC     """Execute a SQL write via Statement Execution API with audit-first pattern.
+# MAGIC     Writes two audit records (PENDING before, then SUCCESS/FAILED after) — pure append."""
+# MAGIC     from databricks.sdk.service.sql import StatementState
+# MAGIC
+# MAGIC     w = WorkspaceClient()
+# MAGIC     audit_id = str(uuid.uuid4())
+# MAGIC     executed_at = datetime.now(timezone.utc).isoformat()
+# MAGIC     cat = config['catalog']
+# MAGIC     sch = config['schema']
+# MAGIC
+# MAGIC     # Audit record 1: PENDING (before business write)
+# MAGIC     audit_sql = f"""
+# MAGIC     INSERT INTO {cat}.{sch}.billing_write_audit
+# MAGIC     (audit_id, action_type, target_table, target_record_id, customer_id,
+# MAGIC      agent_session_id, executed_by, payload_json, sql_statement,
+# MAGIC      result_status, result_message, error_detail, executed_at)
+# MAGIC     VALUES (
+# MAGIC       '{audit_id}', '{action_type}',
+# MAGIC       '{payload.get("target_table", "unknown")}',
+# MAGIC       '{payload.get("record_id", "")}',
+# MAGIC       {customer_id if customer_id is not None else 'NULL'},
+# MAGIC       {f"'{session_id}'" if session_id else 'NULL'},
+# MAGIC       'ai_billing_agent',
+# MAGIC       '{json.dumps(payload).replace("'", "''")}',
+# MAGIC       '{sql.replace("'", "''")}',
+# MAGIC       'PENDING', 'Audit pre-written before business SQL.', NULL,
+# MAGIC       TIMESTAMP '{executed_at}'
+# MAGIC     )
+# MAGIC     """
+# MAGIC     try:
+# MAGIC         resp = w.statement_execution.execute_statement(
+# MAGIC             statement=audit_sql, warehouse_id=warehouse_id, wait_timeout="15s")
+# MAGIC         if resp.status.state not in (StatementState.SUCCEEDED, StatementState.RUNNING):
+# MAGIC             return {"success": False, "audit_id": audit_id,
+# MAGIC                     "message": f"Write aborted: audit creation failed ({resp.status.state})."}
+# MAGIC     except Exception as e:
+# MAGIC         return {"success": False, "audit_id": audit_id,
+# MAGIC                 "message": f"Write aborted: audit creation failed ({e})."}
+# MAGIC
+# MAGIC     # Execute the business SQL
+# MAGIC     try:
+# MAGIC         resp = w.statement_execution.execute_statement(
+# MAGIC             statement=sql, warehouse_id=warehouse_id, wait_timeout="30s")
+# MAGIC         if resp.status.state == StatementState.SUCCEEDED:
+# MAGIC             # Audit record 2: SUCCESS
+# MAGIC             w.statement_execution.execute_statement(
+# MAGIC                 statement=f"""INSERT INTO {cat}.{sch}.billing_write_audit
+# MAGIC                 (audit_id, action_type, target_table, target_record_id, customer_id,
+# MAGIC                  agent_session_id, executed_by, payload_json, sql_statement,
+# MAGIC                  result_status, result_message, error_detail, executed_at)
+# MAGIC                 VALUES ('{str(uuid.uuid4())}', '{action_type}',
+# MAGIC                 '{payload.get("target_table", "")}', '{payload.get("record_id", "")}',
+# MAGIC                 {customer_id if customer_id is not None else 'NULL'},
+# MAGIC                 {f"'{session_id}'" if session_id else 'NULL'},
+# MAGIC                 'ai_billing_agent', NULL, NULL, 'SUCCESS',
+# MAGIC                 'Write completed successfully.', NULL,
+# MAGIC                 TIMESTAMP '{datetime.now(timezone.utc).isoformat()}')""",
+# MAGIC                 warehouse_id=warehouse_id, wait_timeout="10s")
+# MAGIC             return {"success": True, "message": "Write completed successfully.", "audit_id": audit_id}
+# MAGIC         else:
+# MAGIC             error = str(resp.status.error) if resp.status.error else "Unknown error"
+# MAGIC             w.statement_execution.execute_statement(
+# MAGIC                 statement=f"""INSERT INTO {cat}.{sch}.billing_write_audit
+# MAGIC                 (audit_id, action_type, target_table, target_record_id, customer_id,
+# MAGIC                  agent_session_id, executed_by, payload_json, sql_statement,
+# MAGIC                  result_status, result_message, error_detail, executed_at)
+# MAGIC                 VALUES ('{str(uuid.uuid4())}', '{action_type}',
+# MAGIC                 '{payload.get("target_table", "")}', '{payload.get("record_id", "")}',
+# MAGIC                 {customer_id if customer_id is not None else 'NULL'},
+# MAGIC                 {f"'{session_id}'" if session_id else 'NULL'},
+# MAGIC                 'ai_billing_agent', NULL, NULL, 'FAILED',
+# MAGIC                 'Business SQL failed.', '{error[:500].replace("'", "''")}',
+# MAGIC                 TIMESTAMP '{datetime.now(timezone.utc).isoformat()}')""",
+# MAGIC                 warehouse_id=warehouse_id, wait_timeout="10s")
+# MAGIC             return {"success": False, "message": f"Write failed: {error}", "audit_id": audit_id}
+# MAGIC     except Exception as e:
+# MAGIC         return {"success": False, "message": f"Write exception: {e}", "audit_id": audit_id}
+# MAGIC
+# MAGIC
+# MAGIC def _extract_pending_write(messages: list[dict]) -> dict | None:
+# MAGIC     for msg in reversed(messages[-4:]):
+# MAGIC         content = msg.get("content", "")
+# MAGIC         if isinstance(content, str) and content.startswith(WRITE_PENDING_PREFIX):
+# MAGIC             try:
+# MAGIC                 return json.loads(content[len(WRITE_PENDING_PREFIX) + 1:])
+# MAGIC             except Exception:
+# MAGIC                 pass
+# MAGIC     return None
+# MAGIC
+# MAGIC
+# MAGIC def _user_confirmed(messages: list[dict]) -> bool:
+# MAGIC     for msg in reversed(messages[-2:]):
+# MAGIC         if msg.get("role") == "user":
+# MAGIC             text = (msg.get("content", "") or "").lower().strip()
+# MAGIC             return any(phrase in text for phrase in CONFIRM_PHRASES)
+# MAGIC     return False
+# MAGIC
+# MAGIC
+# MAGIC def _user_cancelled(messages: list[dict]) -> bool:
+# MAGIC     for msg in reversed(messages[-2:]):
+# MAGIC         if msg.get("role") == "user":
+# MAGIC             text = (msg.get("content", "") or "").lower().strip()
+# MAGIC             return any(phrase in text for phrase in CANCEL_PHRASES)
+# MAGIC     return False
+# MAGIC
+# MAGIC
+# MAGIC ###############################################################################
+# MAGIC ## Define tools
 # MAGIC ###############################################################################
 # MAGIC catalog = config['catalog']
 # MAGIC schema = config['schema']
 # MAGIC
 # MAGIC tools = []
 # MAGIC
-# MAGIC # You can use UDFs in Unity Catalog as agent tools
+# MAGIC # UC function tools (read-only)
 # MAGIC uc_tool_names = [
 # MAGIC     config['tools_billing_faq'],
 # MAGIC     config['tools_billing'],
@@ -262,14 +398,14 @@ with open("config.yaml", "w") as f:
 # MAGIC     config['tools_customer_erp_profile'],
 # MAGIC     config['tools_revenue_attribution'],
 # MAGIC     config['tools_finance_ops_summary'],
+# MAGIC     config['tools_open_disputes'],
+# MAGIC     config['tools_write_audit'],
 # MAGIC     ]
 # MAGIC uc_toolkit = UCFunctionToolkit(function_names=uc_tool_names)
 # MAGIC tools.extend(uc_toolkit.tools)
 # MAGIC
 # MAGIC ###############################################################################
-# MAGIC ## Genie Space tool for ad-hoc billing analytics
-# MAGIC ## This tool delegates complex analytical questions to a Databricks Genie Space
-# MAGIC ## that can generate and execute SQL over the full billing dataset.
+# MAGIC ## Genie Space tool
 # MAGIC ###############################################################################
 # MAGIC genie_space_id = config.get('genie_space_id', '')
 # MAGIC
@@ -291,36 +427,28 @@ with open("config.yaml", "w") as f:
 # MAGIC         lookup_customer, lookup_billing, or lookup_billing_items tools instead.
 # MAGIC         """
 # MAGIC         response = _genie_client.genie.start_conversation(
-# MAGIC             space_id=genie_space_id,
-# MAGIC             content=question,
-# MAGIC         )
+# MAGIC             space_id=genie_space_id, content=question)
 # MAGIC
 # MAGIC         conversation_id = response.conversation_id
 # MAGIC         message_id = response.message_id
 # MAGIC
-# MAGIC         # Poll for completion (Genie queries are async)
 # MAGIC         max_attempts = 30
 # MAGIC         result = None
 # MAGIC         for _ in range(max_attempts):
 # MAGIC             result = _genie_client.genie.get_message(
 # MAGIC                 space_id=genie_space_id,
-# MAGIC                 conversation_id=conversation_id,
-# MAGIC                 message_id=message_id,
-# MAGIC             )
+# MAGIC                 conversation_id=conversation_id, message_id=message_id)
 # MAGIC             if hasattr(result, 'status') and result.status in ("COMPLETED", "FAILED"):
 # MAGIC                 break
 # MAGIC             time.sleep(2)
 # MAGIC
 # MAGIC         if result is None or not hasattr(result, 'status'):
 # MAGIC             return "The analytics query timed out. Please try a simpler question."
-# MAGIC
 # MAGIC         if result.status == "FAILED":
 # MAGIC             return "The analytics query could not be completed. Please try rephrasing your question."
-# MAGIC
 # MAGIC         if result.status != "COMPLETED":
 # MAGIC             return "The analytics query timed out. Please try a simpler question."
 # MAGIC
-# MAGIC         # Extract results from attachments
 # MAGIC         if hasattr(result, 'attachments') and result.attachments:
 # MAGIC             parts = []
 # MAGIC             for att in result.attachments:
@@ -338,9 +466,183 @@ with open("config.yaml", "w") as f:
 # MAGIC
 # MAGIC     tools.append(ask_billing_analytics)
 # MAGIC
-# MAGIC #####################
-# MAGIC ## Define agent logic
-# MAGIC #####################
+# MAGIC ###############################################################################
+# MAGIC ## Write-back tools
+# MAGIC ###############################################################################
+# MAGIC
+# MAGIC @tool
+# MAGIC def request_write_confirmation(action_type: str, payload_json: str,
+# MAGIC                                human_readable_summary: str) -> str:
+# MAGIC     """Stage a write action for human confirmation. Call this BEFORE any write.
+# MAGIC     action_type: acknowledge_anomaly, create_billing_dispute, update_dispute_status.
+# MAGIC     payload_json: JSON string with all fields for the action.
+# MAGIC     human_readable_summary: what you will show the user.
+# MAGIC     Returns a WRITE_PENDING sentinel. Then ask the user to reply CONFIRM or CANCEL.
+# MAGIC     """
+# MAGIC     try:
+# MAGIC         payload = json.loads(payload_json)
+# MAGIC     except Exception as e:
+# MAGIC         return f"ERROR: payload_json is not valid JSON: {e}"
+# MAGIC
+# MAGIC     pending = {"action_type": action_type, "payload": payload,
+# MAGIC                "staged_at": datetime.now(timezone.utc).isoformat()}
+# MAGIC     return f"{WRITE_PENDING_PREFIX}|{json.dumps(pending)}"
+# MAGIC
+# MAGIC
+# MAGIC @tool
+# MAGIC def acknowledge_anomaly(anomaly_id: str, reason: str, customer_id: str) -> str:
+# MAGIC     """Acknowledge a billing anomaly. ONLY call after user confirmed via request_write_confirmation.
+# MAGIC     Sets billing_anomalies row as acknowledged with the given reason.
+# MAGIC     """
+# MAGIC     warehouse_id = config.get("warehouse_id", "")
+# MAGIC     if not warehouse_id:
+# MAGIC         return "ERROR: warehouse_id not configured."
+# MAGIC
+# MAGIC     cat, sch = config["catalog"], config["schema"]
+# MAGIC     now_ts = datetime.now(timezone.utc).isoformat()
+# MAGIC
+# MAGIC     sql = f"""
+# MAGIC         UPDATE {cat}.{sch}.billing_anomalies
+# MAGIC         SET acknowledged_by = 'ai_billing_agent',
+# MAGIC             acknowledged_at = TIMESTAMP '{now_ts}',
+# MAGIC             acknowledgement_reason = '{reason.replace("'", "''")}'
+# MAGIC         WHERE CONCAT(CAST(customer_id AS STRING), '-', event_month, '-', anomaly_type) = '{anomaly_id}'
+# MAGIC     """
+# MAGIC     result = _execute_sql(sql=sql, warehouse_id=warehouse_id,
+# MAGIC                           action_type="ACKNOWLEDGE_ANOMALY",
+# MAGIC                           payload={"target_table": f"{cat}.{sch}.billing_anomalies",
+# MAGIC                                    "record_id": anomaly_id, "reason": reason},
+# MAGIC                           customer_id=int(customer_id) if customer_id else None,
+# MAGIC                           session_id=None)
+# MAGIC     if result["success"]:
+# MAGIC         return f"SUCCESS: Anomaly {anomaly_id} acknowledged. Audit ID: {result['audit_id']}."
+# MAGIC     return f"FAILED: {result['message']} (Audit ID: {result['audit_id']})"
+# MAGIC
+# MAGIC
+# MAGIC @tool
+# MAGIC def create_billing_dispute(customer_id: str, dispute_type: str, description: str,
+# MAGIC                            disputed_amount_usd: str, anomaly_id: str = "",
+# MAGIC                            event_month: str = "") -> str:
+# MAGIC     """Create a billing dispute. ONLY call after user confirmed.
+# MAGIC     dispute_type: BILLING_ERROR, ROAMING_DISPUTE, PLAN_MISMATCH, OVERCHARGE, UNAUTHORIZED_CHARGE.
+# MAGIC     """
+# MAGIC     warehouse_id = config.get("warehouse_id", "")
+# MAGIC     if not warehouse_id:
+# MAGIC         return "ERROR: warehouse_id not configured."
+# MAGIC
+# MAGIC     valid = {"BILLING_ERROR", "ROAMING_DISPUTE", "PLAN_MISMATCH", "OVERCHARGE", "UNAUTHORIZED_CHARGE"}
+# MAGIC     if dispute_type not in valid:
+# MAGIC         return f"ERROR: Invalid dispute_type. Must be one of: {sorted(valid)}"
+# MAGIC
+# MAGIC     try:
+# MAGIC         amount = float(disputed_amount_usd)
+# MAGIC     except ValueError:
+# MAGIC         return f"ERROR: disputed_amount_usd must be numeric, got '{disputed_amount_usd}'"
+# MAGIC
+# MAGIC     cat, sch = config["catalog"], config["schema"]
+# MAGIC     dispute_id = str(uuid.uuid4())
+# MAGIC     now_ts = datetime.now(timezone.utc).isoformat()
+# MAGIC
+# MAGIC     sql = f"""
+# MAGIC         INSERT INTO {cat}.{sch}.billing_disputes
+# MAGIC         (dispute_id, customer_id, anomaly_id, event_month, dispute_type, status,
+# MAGIC          description, disputed_amount_usd, created_by, created_at, updated_at)
+# MAGIC         VALUES ('{dispute_id}', {int(customer_id)},
+# MAGIC           {f"'{anomaly_id}'" if anomaly_id else 'NULL'},
+# MAGIC           {f"'{event_month}'" if event_month else 'NULL'},
+# MAGIC           '{dispute_type}', 'OPEN', '{description.replace("'", "''")}',
+# MAGIC           {amount}, 'ai_billing_agent', TIMESTAMP '{now_ts}', TIMESTAMP '{now_ts}')
+# MAGIC     """
+# MAGIC     result = _execute_sql(sql=sql, warehouse_id=warehouse_id,
+# MAGIC                           action_type="CREATE_DISPUTE",
+# MAGIC                           payload={"target_table": f"{cat}.{sch}.billing_disputes",
+# MAGIC                                    "record_id": dispute_id, "customer_id": customer_id},
+# MAGIC                           customer_id=int(customer_id), session_id=None)
+# MAGIC     if result["success"]:
+# MAGIC         return f"SUCCESS: Dispute {dispute_id} created (OPEN). Audit ID: {result['audit_id']}."
+# MAGIC     return f"FAILED: {result['message']} (Audit ID: {result['audit_id']})"
+# MAGIC
+# MAGIC
+# MAGIC @tool
+# MAGIC def update_dispute_status(dispute_id: str, new_status: str, resolution_notes: str,
+# MAGIC                           resolved_amount_usd: str = "") -> str:
+# MAGIC     """Update dispute status. ONLY call after user confirmed.
+# MAGIC     new_status: UNDER_REVIEW, RESOLVED_CREDIT, RESOLVED_NO_ACTION, ESCALATED, CLOSED.
+# MAGIC     """
+# MAGIC     warehouse_id = config.get("warehouse_id", "")
+# MAGIC     if not warehouse_id:
+# MAGIC         return "ERROR: warehouse_id not configured."
+# MAGIC
+# MAGIC     valid = {"UNDER_REVIEW", "RESOLVED_CREDIT", "RESOLVED_NO_ACTION", "ESCALATED", "CLOSED"}
+# MAGIC     if new_status not in valid:
+# MAGIC         return f"ERROR: Invalid status. Must be one of: {sorted(valid)}"
+# MAGIC     if new_status == "RESOLVED_CREDIT" and not resolved_amount_usd:
+# MAGIC         return "ERROR: resolved_amount_usd required for RESOLVED_CREDIT."
+# MAGIC
+# MAGIC     cat, sch = config["catalog"], config["schema"]
+# MAGIC     now_ts = datetime.now(timezone.utc).isoformat()
+# MAGIC     is_terminal = new_status in ("RESOLVED_CREDIT", "RESOLVED_NO_ACTION", "CLOSED")
+# MAGIC
+# MAGIC     sql = f"""
+# MAGIC         UPDATE {cat}.{sch}.billing_disputes
+# MAGIC         SET status = '{new_status}',
+# MAGIC             resolution_notes = '{resolution_notes.replace("'", "''")}',
+# MAGIC             updated_at = TIMESTAMP '{now_ts}'
+# MAGIC             {f", resolved_at = TIMESTAMP '{now_ts}'" if is_terminal else ""}
+# MAGIC             {f", resolved_amount_usd = {float(resolved_amount_usd)}" if resolved_amount_usd else ""}
+# MAGIC         WHERE dispute_id = '{dispute_id}'
+# MAGIC     """
+# MAGIC     result = _execute_sql(sql=sql, warehouse_id=warehouse_id,
+# MAGIC                           action_type="UPDATE_DISPUTE",
+# MAGIC                           payload={"target_table": f"{cat}.{sch}.billing_disputes",
+# MAGIC                                    "record_id": dispute_id, "new_status": new_status},
+# MAGIC                           customer_id=None, session_id=None)
+# MAGIC     if result["success"]:
+# MAGIC         return f"SUCCESS: Dispute {dispute_id} -> {new_status}. Audit ID: {result['audit_id']}."
+# MAGIC     return f"FAILED: {result['message']} (Audit ID: {result['audit_id']})"
+# MAGIC
+# MAGIC
+# MAGIC @tool
+# MAGIC def lookup_dispute_history(customer_id: str) -> str:
+# MAGIC     """Look up all disputes for a customer. READ-ONLY — no confirmation needed."""
+# MAGIC     warehouse_id = config.get("warehouse_id", "")
+# MAGIC     if not warehouse_id:
+# MAGIC         return "ERROR: warehouse_id not configured."
+# MAGIC
+# MAGIC     from databricks.sdk.service.sql import StatementState
+# MAGIC     w = WorkspaceClient()
+# MAGIC     resp = w.statement_execution.execute_statement(
+# MAGIC         statement=f"""
+# MAGIC             SELECT dispute_id, dispute_type, status, disputed_amount_usd,
+# MAGIC                    resolved_amount_usd, description, created_at
+# MAGIC             FROM {config['catalog']}.{config['schema']}.billing_disputes
+# MAGIC             WHERE customer_id = {int(customer_id)} ORDER BY created_at DESC LIMIT 20
+# MAGIC         """,
+# MAGIC         warehouse_id=warehouse_id, wait_timeout="15s")
+# MAGIC
+# MAGIC     if resp.status.state != StatementState.SUCCEEDED:
+# MAGIC         return f"ERROR: {resp.status.error}"
+# MAGIC     if not resp.result or not resp.result.data_array:
+# MAGIC         return f"No disputes found for customer {customer_id}."
+# MAGIC
+# MAGIC     lines = [f"Disputes for customer {customer_id}:"]
+# MAGIC     for row in resp.result.data_array:
+# MAGIC         lines.append(f"  [{row[0]}] {row[1]} | {row[2]} | ${row[3]} disputed | {row[6]}")
+# MAGIC     return "\n".join(lines)
+# MAGIC
+# MAGIC
+# MAGIC # Register write-back tools
+# MAGIC tools.extend([
+# MAGIC     request_write_confirmation,
+# MAGIC     acknowledge_anomaly,
+# MAGIC     create_billing_dispute,
+# MAGIC     update_dispute_status,
+# MAGIC     lookup_dispute_history,
+# MAGIC ])
+# MAGIC
+# MAGIC ###############################################################################
+# MAGIC ## Define agent logic — 3-node graph with write confirmation
+# MAGIC ###############################################################################
 # MAGIC
 # MAGIC
 # MAGIC def create_tool_calling_agent(
@@ -350,85 +652,109 @@ with open("config.yaml", "w") as f:
 # MAGIC ) -> CompiledGraph:
 # MAGIC     model = model.bind_tools(tools)
 # MAGIC
-# MAGIC     # Define the function that determines which node to go to
-# MAGIC     def should_continue(state: ChatAgentState):
-# MAGIC         messages = state["messages"]
-# MAGIC         last_message = messages[-1]
-# MAGIC         # If there are function calls, continue. else, end
-# MAGIC         if last_message.get("tool_calls"):
-# MAGIC             return "continue"
-# MAGIC         else:
-# MAGIC             return "end"
-# MAGIC
 # MAGIC     system_message = [{"role": "system", "content": system_prompt}] if system_prompt else []
 # MAGIC
-# MAGIC     def call_model(
-# MAGIC         state: ChatAgentState,
-# MAGIC         config: RunnableConfig,
-# MAGIC     ):
+# MAGIC     def call_model(state: ChatAgentState, config: RunnableConfig):
 # MAGIC         messages = state["messages"]
-# MAGIC         # Only prepend system prompt if not already present
 # MAGIC         if system_message and (not messages or messages[0].get("role") != "system"):
 # MAGIC             messages = system_message + messages
-# MAGIC         response = model.invoke(messages, config)
+# MAGIC         return {"messages": [model.invoke(messages, config)]}
 # MAGIC
-# MAGIC         return {"messages": [response]}
+# MAGIC     def should_continue(state: ChatAgentState) -> str:
+# MAGIC         last = state["messages"][-1]
+# MAGIC         return "continue" if last.get("tool_calls") else "end"
+# MAGIC
+# MAGIC     def route_after_tools(state: ChatAgentState) -> str:
+# MAGIC         for msg in reversed(state["messages"][-3:]):
+# MAGIC             content = msg.get("content", "")
+# MAGIC             if isinstance(content, str) and content.startswith(WRITE_PENDING_PREFIX):
+# MAGIC                 return "pending"
+# MAGIC         return "agent"
+# MAGIC
+# MAGIC     # Capture module-level config for use in confirm_or_cancel closure
+# MAGIC     config_ = config
+# MAGIC
+# MAGIC     def confirm_or_cancel(state: ChatAgentState, cfg: RunnableConfig):
+# MAGIC         messages = state["messages"]
+# MAGIC         pending = _extract_pending_write(messages)
+# MAGIC
+# MAGIC         if pending is None:
+# MAGIC             return {"messages": []}
+# MAGIC
+# MAGIC         if _user_cancelled(messages):
+# MAGIC             action_type = pending.get("action_type", "unknown")
+# MAGIC             # Write CANCELLED audit
+# MAGIC             wh = config_.get("warehouse_id", "")
+# MAGIC             if wh:
+# MAGIC                 try:
+# MAGIC                     w_local = WorkspaceClient()
+# MAGIC                     w_local.statement_execution.execute_statement(
+# MAGIC                         statement=f"""INSERT INTO {config_['catalog']}.{config_['schema']}.billing_write_audit
+# MAGIC                         (audit_id, action_type, target_table, target_record_id, customer_id,
+# MAGIC                          agent_session_id, executed_by, payload_json, sql_statement,
+# MAGIC                          result_status, result_message, error_detail, executed_at)
+# MAGIC                         VALUES ('{str(uuid.uuid4())}', '{action_type}', 'N/A', '', NULL, NULL,
+# MAGIC                         'ai_billing_agent', '{json.dumps(pending.get("payload", {})).replace("'", "''")}',
+# MAGIC                         NULL, 'CANCELLED', 'User cancelled the pending action.', NULL,
+# MAGIC                         TIMESTAMP '{datetime.now(timezone.utc).isoformat()}')""",
+# MAGIC                         warehouse_id=wh, wait_timeout="10s")
+# MAGIC                 except Exception:
+# MAGIC                     pass
+# MAGIC             return {"messages": [{"role": "tool", "content":
+# MAGIC                     f"CANCELLED: The pending '{action_type}' action was cancelled. No data was modified.",
+# MAGIC                     "tool_call_id": "cancelled_write"}]}
+# MAGIC
+# MAGIC         if _user_confirmed(messages):
+# MAGIC             return {"messages": [{"role": "tool", "content":
+# MAGIC                     f"CONFIRMED: User approved '{pending.get('action_type')}'. Proceed with execution.",
+# MAGIC                     "tool_call_id": "confirmed_write"}]}
+# MAGIC
+# MAGIC         return {"messages": [{"role": "tool", "content":
+# MAGIC                 f"AWAITING_CONFIRMATION: Reply CONFIRM to proceed or CANCEL to abort.",
+# MAGIC                 "tool_call_id": "awaiting_confirmation"}]}
 # MAGIC
 # MAGIC     workflow = StateGraph(ChatAgentState)
 # MAGIC
 # MAGIC     workflow.add_node("agent", RunnableLambda(call_model))
 # MAGIC     workflow.add_node("tools", ChatAgentToolNode(tools))
+# MAGIC     workflow.add_node("confirm_or_cancel", RunnableLambda(confirm_or_cancel))
 # MAGIC
 # MAGIC     workflow.set_entry_point("agent")
-# MAGIC     workflow.add_conditional_edges(
-# MAGIC         "agent",
-# MAGIC         should_continue,
-# MAGIC         {
-# MAGIC             "continue": "tools",
-# MAGIC             "end": END,
-# MAGIC         },
-# MAGIC     )
-# MAGIC     workflow.add_edge("tools", "agent")
+# MAGIC     workflow.add_conditional_edges("agent", should_continue,
+# MAGIC                                   {"continue": "tools", "end": END})
+# MAGIC     workflow.add_conditional_edges("tools", route_after_tools,
+# MAGIC                                   {"pending": "confirm_or_cancel", "agent": "agent"})
+# MAGIC     workflow.add_edge("confirm_or_cancel", "agent")
 # MAGIC
-# MAGIC     return workflow.compile(recursion_limit=25)
+# MAGIC     return workflow.compile(recursion_limit=30)
 # MAGIC
 # MAGIC
 # MAGIC class LangGraphChatAgent(ChatAgent):
 # MAGIC     def __init__(self, agent: CompiledStateGraph):
 # MAGIC         self.agent = agent
 # MAGIC
-# MAGIC     def predict(
-# MAGIC         self,
-# MAGIC         messages: list[ChatAgentMessage],
-# MAGIC         context: Optional[ChatContext] = None,
-# MAGIC         custom_inputs: Optional[dict[str, Any]] = None,
-# MAGIC     ) -> ChatAgentResponse:
+# MAGIC     def predict(self, messages: list[ChatAgentMessage],
+# MAGIC                 context: Optional[ChatContext] = None,
+# MAGIC                 custom_inputs: Optional[dict[str, Any]] = None) -> ChatAgentResponse:
 # MAGIC         request = {"messages": self._convert_messages_to_dict(messages)}
-# MAGIC
 # MAGIC         messages = []
 # MAGIC         for event in self.agent.stream(request, stream_mode="updates"):
 # MAGIC             for node_data in event.values():
 # MAGIC                 messages.extend(
-# MAGIC                     ChatAgentMessage(**msg) for msg in node_data.get("messages", [])
-# MAGIC                 )
+# MAGIC                     ChatAgentMessage(**msg) for msg in node_data.get("messages", []))
 # MAGIC         return ChatAgentResponse(messages=messages)
 # MAGIC
-# MAGIC     def predict_stream(
-# MAGIC         self,
-# MAGIC         messages: list[ChatAgentMessage],
-# MAGIC         context: Optional[ChatContext] = None,
-# MAGIC         custom_inputs: Optional[dict[str, Any]] = None,
-# MAGIC     ) -> Generator[ChatAgentChunk, None, None]:
+# MAGIC     def predict_stream(self, messages: list[ChatAgentMessage],
+# MAGIC                        context: Optional[ChatContext] = None,
+# MAGIC                        custom_inputs: Optional[dict[str, Any]] = None
+# MAGIC                        ) -> Generator[ChatAgentChunk, None, None]:
 # MAGIC         request = {"messages": self._convert_messages_to_dict(messages)}
 # MAGIC         for event in self.agent.stream(request, stream_mode="updates"):
 # MAGIC             for node_data in event.values():
 # MAGIC                 yield from (
-# MAGIC                     ChatAgentChunk(**{"delta": msg}) for msg in node_data.get("messages", [])
-# MAGIC                 )
+# MAGIC                     ChatAgentChunk(**{"delta": msg}) for msg in node_data.get("messages", []))
 # MAGIC
 # MAGIC
-# MAGIC # Create the agent object, and specify it as the agent object to use when
-# MAGIC # loading the agent back for inference via mlflow.models.set_model()
 # MAGIC agent = create_tool_calling_agent(llm, tools, system_prompt)
 # MAGIC AGENT = LangGraphChatAgent(agent)
 # MAGIC mlflow.models.set_model(AGENT)

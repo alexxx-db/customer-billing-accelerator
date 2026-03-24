@@ -110,6 +110,13 @@ config['erp_uc_connection'] = ''
 config['erp_foreign_catalog'] = ''
 
 # UC tools — external data
+# Write-back (Gap #6)
+config['disputes_table'] = config['catalog']+'.'+config['database']+'.billing_disputes'
+config['write_audit_table'] = config['catalog']+'.'+config['database']+'.billing_write_audit'
+config['tools_open_disputes'] = config['catalog']+'.'+config['database']+'.lookup_open_disputes'
+config['tools_write_audit'] = config['catalog']+'.'+config['database']+'.lookup_write_audit'
+
+# UC tools — external data
 config['tools_customer_erp_profile'] = config['catalog']+'.'+config['database']+'.lookup_customer_erp_profile'
 config['tools_revenue_attribution'] = config['catalog']+'.'+config['database']+'.lookup_revenue_attribution'
 config['tools_finance_ops_summary'] = config['catalog']+'.'+config['database']+'.get_finance_operations_summary'
@@ -151,6 +158,9 @@ config['genie_space_tables'] = [
     config['catalog'] + '.' + config['database'] + '.silver_conformed_kpi_defs',
     config['catalog'] + '.' + config['database'] + '.gold_revenue_attribution',
     config['catalog'] + '.' + config['database'] + '.gold_finance_operations_summary',
+    # Write-back tables (Gap #6)
+    config['catalog'] + '.' + config['database'] + '.billing_disputes',
+    config['catalog'] + '.' + config['database'] + '.billing_write_audit',
 ]
 config['genie_space_sample_questions'] = [
     "What is the average monthly total charge across all customers?",
@@ -177,6 +187,10 @@ config['genie_space_sample_questions'] = [
     "Show revenue variance between billing and ERP by account type",
     "What are the top procurement cost categories and how have they trended?",
     "Show me the FX rate for EUR over the last 90 days",
+    "How many open billing disputes are there by type?",
+    "What is the total disputed amount across all open disputes?",
+    "Show me all write operations the AI agent has performed in the last 24 hours",
+    "Which customers have disputes open for more than 7 days?",
 ]
 config['genie_space_id'] = None  # Set by 03a_create_genie_space after creation
 

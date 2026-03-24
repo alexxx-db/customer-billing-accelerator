@@ -16,6 +16,10 @@ tools_job_reliability: cme_demos_alex_barreto.telco_billing_db.lookup_job_reliab
 tools_customer_erp_profile: cme_demos_alex_barreto.telco_billing_db.lookup_customer_erp_profile
 tools_revenue_attribution: cme_demos_alex_barreto.telco_billing_db.lookup_revenue_attribution
 tools_finance_ops_summary: cme_demos_alex_barreto.telco_billing_db.get_finance_operations_summary
+disputes_table: cme_demos_alex_barreto.telco_billing_db.billing_disputes
+write_audit_table: cme_demos_alex_barreto.telco_billing_db.billing_write_audit
+tools_open_disputes: cme_demos_alex_barreto.telco_billing_db.lookup_open_disputes
+tools_write_audit: cme_demos_alex_barreto.telco_billing_db.lookup_write_audit
 erp_connection_host: ''
 erp_connection_port: '5432'
 erp_connection_user: ''
@@ -78,6 +82,18 @@ agent_prompt: |
     use get_finance_operations_summary.
   - ERP data may have a 24-hour lag. Revenue variance < 10% is normal timing difference.
 
+  Write-Back Operations (require explicit user confirmation):
+  - You CAN acknowledge billing anomalies, create billing disputes, and update
+    dispute statuses. These are write operations — they modify data permanently.
+  - ALWAYS call request_write_confirmation BEFORE any write operation. This stages
+    the action and asks the user to confirm. Do not call acknowledge_anomaly,
+    create_billing_dispute, or update_dispute_status directly without staging first.
+  - After staging, explain what will happen and ask the user to reply CONFIRM or CANCEL.
+  - When acknowledging an anomaly, always provide a reason.
+  - To check existing disputes, use lookup_dispute_history (in-agent) or
+    lookup_open_disputes (UC function).
+  - Never acknowledge anomalies in bulk. Handle one at a time.
+
   Process:
   1. Run FAQ Search -> If an answer exists, return it.
   2. If no FAQ match, ask for the customer_id and use the relevant tool(s) to fetch billing details.
@@ -86,6 +102,7 @@ agent_prompt: |
   5. When asked about monitoring status or what's new, use get_monitoring_status.
   6. For platform health or cost questions, use lookup_operational_kpis or lookup_job_reliability.
   7. For ERP/finance questions, use lookup_customer_erp_profile, lookup_revenue_attribution, or get_finance_operations_summary.
-  8. If missing details (e.g., timeframe), ask clarifying questions.
+  8. For write operations (acknowledge, dispute, escalate), use request_write_confirmation first, then execute after user confirms.
+  9. If missing details (e.g., timeframe), ask clarifying questions.
 
   Keep responses polite, professional, and concise.

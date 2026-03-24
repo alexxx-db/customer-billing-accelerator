@@ -505,3 +505,62 @@ display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.lookup_revenue_attribution(
 # COMMAND ----------
 
 display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.get_finance_operations_summary(3);"))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Tool `lookup_open_disputes`
+# MAGIC Returns open billing disputes.
+
+# COMMAND ----------
+
+# DBTITLE 1,Create lookup_open_disputes Function
+spark.sql(f"DROP FUNCTION IF EXISTS {CATALOG}.{SCHEMA}.lookup_open_disputes;")
+
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.lookup_open_disputes(
+  input_customer_id STRING COMMENT 'Customer ID, or empty string for all open disputes'
+)
+RETURNS TABLE (
+  dispute_id STRING, customer_id BIGINT, dispute_type STRING, status STRING,
+  description STRING, disputed_amount_usd DOUBLE, created_at TIMESTAMP, anomaly_id STRING
+)
+COMMENT 'Returns open billing disputes for a customer or all customers.'
+RETURN (
+  SELECT dispute_id, customer_id, dispute_type, status,
+         description, disputed_amount_usd, created_at, anomaly_id
+  FROM {CATALOG}.{SCHEMA}.billing_disputes
+  WHERE (input_customer_id = '' OR customer_id = CAST(input_customer_id AS BIGINT))
+    AND status NOT IN ('RESOLVED_CREDIT', 'RESOLVED_NO_ACTION', 'CLOSED')
+  ORDER BY created_at DESC LIMIT 50
+);
+""")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Tool `lookup_write_audit`
+# MAGIC Returns the write audit trail.
+
+# COMMAND ----------
+
+# DBTITLE 1,Create lookup_write_audit Function
+spark.sql(f"DROP FUNCTION IF EXISTS {CATALOG}.{SCHEMA}.lookup_write_audit;")
+
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.lookup_write_audit(
+  lookback_hours INT COMMENT 'Look back this many hours. Use 24 for today, 168 for last week.'
+)
+RETURNS TABLE (
+  audit_id STRING, action_type STRING, target_record_id STRING,
+  customer_id BIGINT, result_status STRING, result_message STRING, executed_at TIMESTAMP
+)
+COMMENT 'Returns the write audit trail for the given lookback window.'
+RETURN (
+  SELECT audit_id, action_type, target_record_id, customer_id,
+         result_status, result_message, executed_at
+  FROM {CATALOG}.{SCHEMA}.billing_write_audit
+  WHERE executed_at >= CURRENT_TIMESTAMP - MAKE_INTERVAL(0, 0, 0, 0, lookback_hours, 0, 0)
+  ORDER BY executed_at DESC LIMIT 100
+);
+""")

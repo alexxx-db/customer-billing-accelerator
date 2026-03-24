@@ -312,3 +312,86 @@ spark.sql(sqlstr_monitoring_status)
 
 # DBTITLE 1,Test get_monitoring_status
 display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.get_monitoring_status(0);"))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Tool `lookup_operational_kpis`
+# MAGIC Returns daily operational KPIs: DBU consumption, cost, pipeline health, Genie performance.
+
+# COMMAND ----------
+
+# DBTITLE 1,Create lookup_operational_kpis Function
+spark.sql(f"DROP FUNCTION IF EXISTS {CATALOG}.{SCHEMA}.lookup_operational_kpis;")
+
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.lookup_operational_kpis(
+  lookback_days INT COMMENT 'Number of days to look back (e.g. 7 for last week, 30 for last month)'
+)
+RETURNS TABLE (
+  kpi_date                      DATE,
+  total_dbu_consumed            DOUBLE,
+  estimated_daily_cost_usd      DOUBLE,
+  billing_pipeline_success_rate DOUBLE,
+  avg_genie_query_latency_ms    BIGINT,
+  genie_query_count             BIGINT,
+  warehouse_queuing_pct         DOUBLE,
+  anomaly_detection_ran         BOOLEAN,
+  anomaly_detection_state       STRING,
+  dbu_vs_prior_7d_pct           DOUBLE,
+  cost_anomaly_flag             BOOLEAN
+)
+COMMENT 'Returns daily operational KPIs for the billing platform: DBU consumption, estimated cost, pipeline health, Genie usage, and warehouse performance.'
+RETURN (
+  SELECT *
+  FROM {CATALOG}.{SCHEMA}.telemetry_operational_kpis
+  WHERE kpi_date >= CURRENT_DATE - lookback_days
+  ORDER BY kpi_date DESC
+);
+""")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Tool `lookup_job_reliability`
+# MAGIC Returns rolling 30-day reliability metrics for Databricks jobs.
+
+# COMMAND ----------
+
+# DBTITLE 1,Create lookup_job_reliability Function
+spark.sql(f"DROP FUNCTION IF EXISTS {CATALOG}.{SCHEMA}.lookup_job_reliability;")
+
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.lookup_job_reliability(
+  billing_pipelines_only BOOLEAN COMMENT 'If true, return only billing accelerator jobs. If false, return all tracked jobs.'
+)
+RETURNS TABLE (
+  job_id                STRING,
+  job_name              STRING,
+  run_count_30d         BIGINT,
+  success_count_30d     BIGINT,
+  failure_count_30d     BIGINT,
+  success_rate_pct      DOUBLE,
+  avg_duration_minutes  DOUBLE,
+  p95_duration_minutes  DOUBLE,
+  last_run_state        STRING,
+  last_run_ts           TIMESTAMP,
+  is_billing_pipeline   BOOLEAN
+)
+COMMENT 'Returns rolling 30-day reliability metrics for Databricks jobs. Use for questions about job health, failure rates, and runtimes.'
+RETURN (
+  SELECT *
+  FROM {CATALOG}.{SCHEMA}.telemetry_job_reliability
+  WHERE billing_pipelines_only = false OR is_billing_pipeline = true
+  ORDER BY is_billing_pipeline DESC, success_rate_pct ASC
+);
+""")
+
+# COMMAND ----------
+
+# DBTITLE 1,Test Telemetry Functions
+display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.lookup_operational_kpis(7);"))
+
+# COMMAND ----------
+
+display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.lookup_job_reliability(true);"))

@@ -103,6 +103,13 @@ Guidelines:
 - The billing_monthly_running table contains real-time charge estimates from
   the streaming pipeline. If a customer asks "how much have I spent so far this
   month?" use ask_billing_analytics to query billing_monthly_running.
+- For operational health questions about the billing platform itself (costs, job status,
+  pipeline health, warehouse performance), use lookup_operational_kpis or
+  lookup_job_reliability — NOT the billing domain tools which are for customer data.
+- "How much does the platform cost?" -> lookup_operational_kpis(30).
+- "Is the anomaly detection job working?" -> lookup_job_reliability(true).
+- Operational questions are about the Databricks infrastructure, not customer billing.
+  Never share raw DBU record IDs, cluster IDs, or workspace IDs with end users.
 
 Process:
 1. Run FAQ Search -> If an answer exists, return it.
@@ -110,7 +117,8 @@ Process:
 3. For analytical questions across multiple customers, use ask_billing_analytics.
 4. When asked about unusual charges or billing anomalies, use lookup_billing_anomalies.
 5. When asked about monitoring status or what's new, use get_monitoring_status.
-6. If missing details (e.g., timeframe), ask clarifying questions.
+6. For platform health or cost questions, use lookup_operational_kpis or lookup_job_reliability.
+7. If missing details (e.g., timeframe), ask clarifying questions.
 
 Keep responses polite, professional, and concise.
 """
@@ -130,6 +138,8 @@ tools_plans = config['tools_plans']
 tools_customer = config['tools_customer']
 tools_anomalies = config['tools_anomalies']
 tools_monitoring_status = config['tools_monitoring_status']
+tools_operational_kpis = config['tools_operational_kpis']
+tools_job_reliability = config['tools_job_reliability']
 agent_name = config['agent_name']
 genie_space_id = config.get('genie_space_id', '') or ''
 agent_prompt = LiteralString(system_prompt)
@@ -150,6 +160,8 @@ yaml_data = {
     "tools_customer": tools_customer,
     "tools_anomalies": tools_anomalies,
     "tools_monitoring_status": tools_monitoring_status,
+    "tools_operational_kpis": tools_operational_kpis,
+    "tools_job_reliability": tools_job_reliability,
     "agent_name": agent_name,
     "genie_space_id": genie_space_id,
     "agent_prompt": agent_prompt
@@ -232,6 +244,8 @@ with open("config.yaml", "w") as f:
 # MAGIC     config['tools_customer'],
 # MAGIC     config['tools_anomalies'],
 # MAGIC     config['tools_monitoring_status'],
+# MAGIC     config['tools_operational_kpis'],
+# MAGIC     config['tools_job_reliability'],
 # MAGIC     ]
 # MAGIC uc_toolkit = UCFunctionToolkit(function_names=uc_tool_names)
 # MAGIC tools.extend(uc_toolkit.tools)

@@ -11,6 +11,15 @@ tools_plans: cme_demos_alex_barreto.telco_billing_db.lookup_billing_plans
 tools_customer: cme_demos_alex_barreto.telco_billing_db.lookup_customer
 tools_anomalies: cme_demos_alex_barreto.telco_billing_db.lookup_billing_anomalies
 tools_monitoring_status: cme_demos_alex_barreto.telco_billing_db.get_monitoring_status
+tools_operational_kpis: cme_demos_alex_barreto.telco_billing_db.lookup_operational_kpis
+tools_job_reliability: cme_demos_alex_barreto.telco_billing_db.lookup_job_reliability
+telemetry_dbu_table: cme_demos_alex_barreto.telco_billing_db.telemetry_dbu_usage
+telemetry_jobs_table: cme_demos_alex_barreto.telco_billing_db.telemetry_job_runs
+telemetry_queries_table: cme_demos_alex_barreto.telco_billing_db.telemetry_query_history
+telemetry_dbu_daily_table: cme_demos_alex_barreto.telco_billing_db.telemetry_dbu_daily
+telemetry_job_reliability_table: cme_demos_alex_barreto.telco_billing_db.telemetry_job_reliability
+telemetry_wh_utilization_table: cme_demos_alex_barreto.telco_billing_db.telemetry_warehouse_utilization
+telemetry_kpis_table: cme_demos_alex_barreto.telco_billing_db.telemetry_operational_kpis
 dlt_pipeline_id: ''
 monitoring_state_table: cme_demos_alex_barreto.telco_billing_db.billing_monitoring_state
 monitoring_summary_view: cme_demos_alex_barreto.telco_billing_db.billing_monitoring_summary
@@ -44,6 +53,13 @@ agent_prompt: |
   - The billing_monthly_running table contains real-time charge estimates from
     the streaming pipeline. If a customer asks "how much have I spent so far this
     month?" use ask_billing_analytics to query billing_monthly_running.
+  - For operational health questions about the billing platform itself (costs, job status,
+    pipeline health, warehouse performance), use lookup_operational_kpis or
+    lookup_job_reliability — NOT the billing domain tools which are for customer data.
+  - "How much does the platform cost?" -> lookup_operational_kpis(30).
+  - "Is the anomaly detection job working?" -> lookup_job_reliability(true).
+  - Operational questions are about the Databricks infrastructure, not customer billing.
+    Never share raw DBU record IDs, cluster IDs, or workspace IDs with end users.
 
   Process:
   1. Run FAQ Search -> If an answer exists, return it.
@@ -51,6 +67,7 @@ agent_prompt: |
   3. For analytical questions across multiple customers, use ask_billing_analytics.
   4. When asked about unusual charges or billing anomalies, use lookup_billing_anomalies.
   5. When asked about monitoring status or what's new, use get_monitoring_status.
-  6. If missing details (e.g., timeframe), ask clarifying questions.
+  6. For platform health or cost questions, use lookup_operational_kpis or lookup_job_reliability.
+  7. If missing details (e.g., timeframe), ask clarifying questions.
 
   Keep responses polite, professional, and concise.

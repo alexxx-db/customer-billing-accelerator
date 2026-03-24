@@ -86,6 +86,17 @@ config['monitoring_summary_view'] = config['catalog']+'.'+config['database']+'.b
 config['dlt_events_table'] = config['catalog']+'.'+config['database']+'.billing_events_streaming'
 config['dlt_running_table'] = config['catalog']+'.'+config['database']+'.billing_monthly_running'
 
+# System table telemetry
+config['telemetry_dbu_table'] = config['catalog']+'.'+config['database']+'.telemetry_dbu_usage'
+config['telemetry_jobs_table'] = config['catalog']+'.'+config['database']+'.telemetry_job_runs'
+config['telemetry_queries_table'] = config['catalog']+'.'+config['database']+'.telemetry_query_history'
+config['telemetry_dbu_daily_table'] = config['catalog']+'.'+config['database']+'.telemetry_dbu_daily'
+config['telemetry_job_reliability_table'] = config['catalog']+'.'+config['database']+'.telemetry_job_reliability'
+config['telemetry_wh_utilization_table'] = config['catalog']+'.'+config['database']+'.telemetry_warehouse_utilization'
+config['telemetry_kpis_table'] = config['catalog']+'.'+config['database']+'.telemetry_operational_kpis'
+config['tools_operational_kpis'] = config['catalog']+'.'+config['database']+'.lookup_operational_kpis'
+config['tools_job_reliability'] = config['catalog']+'.'+config['database']+'.lookup_job_reliability'
+
 # Genie Space
 config['genie_space_name'] = 'Telco Billing Analytics'
 config['genie_space_description'] = (
@@ -94,14 +105,25 @@ config['genie_space_description'] = (
     'billing_anomalies (detected charge spikes and roaming spikes), '
     'billing_monitoring_state (alert dispatch audit log with severity and delivery status), '
     'and billing_monthly_running (real-time streaming charge estimates per customer per month). '
-    'Tables join via plan_name and customer_id. PII fields are excluded.'
+    'Tables join via plan_name and customer_id. PII fields are excluded. '
+    'telemetry_dbu_daily tracks DBU consumption and estimated cost by SKU and usage type. '
+    'telemetry_job_reliability tracks 30-day rolling success rates for platform jobs. '
+    'telemetry_warehouse_utilization tracks hourly query performance for the SQL warehouse. '
+    'telemetry_operational_kpis is the daily summary of platform health and cost.'
 )
 config['genie_space_tables'] = [
+    # Domain data
     config['catalog'] + '.' + config['database'] + '.invoice_analytics',
     config['catalog'] + '.' + config['database'] + '.billing_plans',
+    # Anomaly and monitoring
     config['catalog'] + '.' + config['database'] + '.billing_anomalies',
     config['catalog'] + '.' + config['database'] + '.billing_monitoring_state',
     config['catalog'] + '.' + config['database'] + '.billing_monthly_running',
+    # Operational telemetry (Silver + Gold only — no Bronze)
+    config['catalog'] + '.' + config['database'] + '.telemetry_dbu_daily',
+    config['catalog'] + '.' + config['database'] + '.telemetry_job_reliability',
+    config['catalog'] + '.' + config['database'] + '.telemetry_warehouse_utilization',
+    config['catalog'] + '.' + config['database'] + '.telemetry_operational_kpis',
 ]
 config['genie_space_sample_questions'] = [
     "What is the average monthly total charge across all customers?",
@@ -117,6 +139,11 @@ config['genie_space_sample_questions'] = [
     "What is the real-time estimated total charge for the top 10 highest-spending customers this month?",
     "Which customers have anomalies that have not been alerted yet?",
     "Show the trend of estimated charges vs actual billed charges for the last 3 months",
+    "What was the total DBU consumption and estimated cost for the last 7 days?",
+    "Is the anomaly detection job currently healthy? What is its 30-day success rate?",
+    "On which days did we have cost anomaly flags raised?",
+    "What is the average Genie query latency compared to last week?",
+    "Which billing pipeline jobs have failed in the last 30 days?",
 ]
 config['genie_space_id'] = None  # Set by 03a_create_genie_space after creation
 

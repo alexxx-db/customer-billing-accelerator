@@ -1,12 +1,19 @@
+import time
+
 import dash
 from dash import html, Input, Output, State, dcc
 import dash_bootstrap_components as dbc
 from model_serving_utils import query_endpoint
 
+# Rate limiting: minimum seconds between endpoint calls per session
+_MIN_REQUEST_INTERVAL = 2.0
+_MAX_INPUT_LENGTH = 2000
+
 class DatabricksChatbot:
     def __init__(self, app, endpoint_name):
         self.app = app
         self.endpoint_name = endpoint_name
+        self._last_request_time = 0.0
         self.layout = self._create_layout()
         self._create_callbacks()
         self._add_custom_css()
@@ -42,7 +49,7 @@ class DatabricksChatbot:
                 ], className='d-flex flex-column chat-body')
             ], className='chat-card mb-3'),
             dbc.InputGroup([
-                dbc.Input(id='user-input', placeholder='Type your message here...', type='text'),
+                dbc.Input(id='user-input', placeholder='Type your message here...', type='text', maxLength=_MAX_INPUT_LENGTH),
                 dbc.Button('Send', id='send-button', color='success', n_clicks=0, className='ms-2'),
                 dbc.Button('Clear', id='clear-button', color='danger', n_clicks=0, className='ms-2'),
             ], className='mb-3'),
@@ -150,6 +157,13 @@ class DatabricksChatbot:
             return dash.no_update, dash.no_update
 
     def _call_model_endpoint(self, messages, max_tokens=1024, persona="customer_care"):
+        # Rate limiting: enforce minimum interval between requests
+        now = time.time()
+        elapsed = now - self._last_request_time
+        if elapsed < _MIN_REQUEST_INTERVAL:
+            time.sleep(_MIN_REQUEST_INTERVAL - elapsed)
+        self._last_request_time = time.time()
+
         try:
             return query_endpoint(self.endpoint_name, messages, max_tokens,
                                   persona=persona)["content"]

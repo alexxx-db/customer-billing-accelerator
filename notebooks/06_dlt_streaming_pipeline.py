@@ -23,6 +23,9 @@ schema  = spark.conf.get("pipeline.schema",  "telco_billing_db")
 
 # COMMAND ----------
 
+@dlt.expect_or_drop("valid_customer_id", "customer_id IS NOT NULL")
+@dlt.expect_or_drop("valid_device_id", "device_id IS NOT NULL")
+@dlt.expect("valid_event_type", "event_type IS NOT NULL")
 @dlt.table(
     name="billing_events_streaming",
     comment="Near-real-time enriched billing events joined with customer and plan metadata",
@@ -62,7 +65,7 @@ def billing_events_streaming():
             customer_plans.Data_Outside_Allowance_Per_MB,
             customer_plans.Data_Limit_GB,
         )
-        .filter(F.col("customer_id").isNotNull())
+        # NULL customer_id rows are dropped by @dlt.expect_or_drop above
     )
 
 # COMMAND ----------
@@ -73,6 +76,9 @@ def billing_events_streaming():
 
 # COMMAND ----------
 
+@dlt.expect("valid_customer_id", "customer_id IS NOT NULL")
+@dlt.expect("valid_event_month", "event_month IS NOT NULL")
+@dlt.expect("positive_total", "estimated_total_charge >= 0")
 @dlt.table(
     name="billing_monthly_running",
     comment="Running per-customer monthly charge estimates from streaming events",

@@ -70,6 +70,16 @@ config['embedding_model_endpoint_name'] = 'databricks-gte-large-en'  # This is d
 config['llm_endpoint']="databricks-claude-3-7-sonnet" # This is default token based pricing endpoint and needs to be updated based on your requirement
 config['warehouse_id']="148ccb90800933a1" # This is the warehouse id and need to be updated for your environment
 
+# Agent guardrails
+config['max_agent_tokens'] = 4096        # Max tokens per LLM response
+config['max_history_turns'] = 20         # Max conversation turns retained (older trimmed)
+
+# Anomaly detection thresholds (consumed by notebook 05)
+config['anomaly_zscore_threshold'] = 2.0       # std deviations for total charge spike
+config['anomaly_roaming_multiplier'] = 3.0     # multiplier over mean for roaming spike
+config['anomaly_intl_multiplier'] = 3.0        # multiplier over mean for international spike
+config['anomaly_min_months'] = 2               # minimum months of history required
+
 # Tools 
 config['tools_billing_faq'] = config['catalog']+'.'+config['database']+'.billing_faq'
 config['tools_billing'] = config['catalog']+'.'+config['database']+'.lookup_billing'

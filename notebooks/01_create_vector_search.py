@@ -151,11 +151,19 @@ try:
     embedding_source_column=embedding_source_column,  # The column to use for generating embeddings.
     embedding_model_endpoint_name=embedding_model_endpoint_name  # The name of the embedding model endpoint.
   )
-  # Wait for index to come online. Expect this command to take several minutes.
-  while not index.describe().get('status').get('detailed_state').startswith('ONLINE'):
-    print("Waiting for index to be ONLINE...")
+  # Wait for index to come online (max ~10 minutes).
+  max_wait_attempts = 120
+  for _attempt in range(max_wait_attempts):
+    state = index.describe().get('status', {}).get('detailed_state', '')
+    if state.startswith('ONLINE'):
+      break
+    if 'FAILED' in state.upper():
+      raise RuntimeError(f"Index {vs_index} failed to provision: {state}")
+    print(f"Waiting for index to be ONLINE (currently: {state})...")
     time.sleep(5)
-    
+  else:
+    raise TimeoutError(f"Index {vs_index} did not come ONLINE within {max_wait_attempts * 5}s")
+
   print(f"index {vs_index} on table {source_table} is ready")
   
 except Exception as e:

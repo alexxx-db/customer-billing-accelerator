@@ -1,4 +1,5 @@
 from typing import Any, Generator, Optional, Sequence, Union
+import logging
 import time
 import json
 import uuid
@@ -30,6 +31,8 @@ from mlflow.types.agent import (
 )
 from mlflow.models import ModelConfig
 
+logger = logging.getLogger(__name__)
+
 mlflow.langchain.autolog()
 
 client = DatabricksFunctionClient()
@@ -41,7 +44,10 @@ config = ModelConfig(development_config="config.yaml").to_dict()
 ############################################
 # Define your LLM endpoint and system prompt
 ############################################
-llm = ChatDatabricks(endpoint=config['llm_endpoint'])
+MAX_AGENT_TOKENS = int(config.get('max_agent_tokens', 4096))
+MAX_HISTORY_TURNS = int(config.get('max_history_turns', 20))
+
+llm = ChatDatabricks(endpoint=config['llm_endpoint'], max_tokens=MAX_AGENT_TOKENS)
 
 # Inject domain-aware context into the base system prompt
 _base_prompt = config.get('agent_prompt', '')
@@ -59,12 +65,12 @@ import yaml as _yaml
 from pathlib import Path as _Path
 
 _PERSONA_PROMPTS: dict[str, str] = {}
-_PERSONA_TOOLS: dict[str, list[str]] = {}
+_PERSONA_TOOLS: dict[str, list[str] | None] = {}  # None = no policy (all tools); [] = explicitly empty
 _PERSONA_AGENTS: dict[str, CompiledGraph] = {}
 
 
 def _load_personas() -> None:
-    """Load persona configs from personas/ directory."""
+    """Load persona configs dynamically from personas/ directory."""
     agent_dir = _Path(__file__).parent if "__file__" in dir() else _Path(".")
     personas_dir = agent_dir / "personas"
 
@@ -78,19 +84,26 @@ def _load_personas() -> None:
         if model_path:
             personas_dir = _Path(model_path) / "artifacts" / "personas"
 
-    for name in ["customer_care", "finance_ops", "executive", "technical"]:
-        yaml_path = personas_dir / f"{name}.yaml"
-        if yaml_path.exists():
+    # Discover all persona YAML files dynamically instead of hardcoding names
+    if personas_dir.exists():
+        for yaml_path in sorted(personas_dir.glob("*.yaml")):
+            name = yaml_path.stem
             try:
                 with open(yaml_path) as f:
                     p = _yaml.safe_load(f)
                 _PERSONA_PROMPTS[name] = p.get("system_prompt", "")
-                _PERSONA_TOOLS[name] = p.get("tool_policy", {}).get("allowed_tools", [])
+                tool_policy = p.get("tool_policy")
+                # None means no tool_policy section at all → all tools allowed
+                # Empty list means explicitly restricted to zero tools
+                _PERSONA_TOOLS[name] = tool_policy.get("allowed_tools", []) if tool_policy else None
+                tool_count = len(_PERSONA_TOOLS[name]) if _PERSONA_TOOLS[name] is not None else "all"
+                logger.info(f"Loaded persona: {name} ({tool_count} tools)")
             except Exception as e:
-                print(f"WARNING: Could not load persona {name}: {e}")
+                logger.warning(f"Could not load persona {name}: {e}")
 
     if not _PERSONA_PROMPTS:
         _PERSONA_PROMPTS["customer_care"] = system_prompt
+        logger.info("No persona files found; using default customer_care prompt")
 
 
 _load_personas()
@@ -293,21 +306,33 @@ if genie_space_id:
         Do NOT use this for individual customer lookups — use the dedicated
         lookup_customer, lookup_billing, or lookup_billing_items tools instead.
         """
-        response = _genie_client.genie.start_conversation(
-            space_id=genie_space_id, content=question)
+        try:
+            response = _genie_client.genie.start_conversation(
+                space_id=genie_space_id, content=question)
+        except Exception as e:
+            logger.error(f"Genie Space conversation start failed: {e}")
+            return "The analytics service is temporarily unavailable. Please try again later."
 
         conversation_id = response.conversation_id
         message_id = response.message_id
 
         max_attempts = 30
+        base_sleep = 1.0  # seconds; increases with exponential backoff
         result = None
-        for _ in range(max_attempts):
-            result = _genie_client.genie.get_message(
-                space_id=genie_space_id,
-                conversation_id=conversation_id, message_id=message_id)
-            if hasattr(result, 'status') and result.status in ("COMPLETED", "FAILED"):
-                break
-            time.sleep(2)
+        for attempt in range(max_attempts):
+            try:
+                result = _genie_client.genie.get_message(
+                    space_id=genie_space_id,
+                    conversation_id=conversation_id, message_id=message_id)
+                if hasattr(result, 'status') and result.status in ("COMPLETED", "FAILED"):
+                    break
+            except Exception as e:
+                logger.warning(f"Genie Space poll attempt {attempt + 1} failed: {e}")
+                if attempt >= max_attempts - 1:
+                    return "The analytics service encountered an error. Please try again later."
+            # Exponential backoff: 1s, 1.5s, 2.25s, ... capped at 5s
+            sleep_time = min(base_sleep * (1.5 ** attempt), 5.0)
+            time.sleep(sleep_time)
 
         if result is None or not hasattr(result, 'status'):
             return "The analytics query timed out. Please try a simpler question."
@@ -365,6 +390,11 @@ def acknowledge_anomaly(anomaly_id: str, reason: str, customer_id: str) -> str:
     if not warehouse_id:
         return "ERROR: warehouse_id not configured."
 
+    try:
+        cust_id_int = int(customer_id) if customer_id else None
+    except ValueError:
+        return f"ERROR: customer_id must be numeric, got '{customer_id}'"
+
     cat, sch = config["catalog"], config["schema"]
     now_ts = datetime.now(timezone.utc).isoformat()
 
@@ -373,13 +403,13 @@ def acknowledge_anomaly(anomaly_id: str, reason: str, customer_id: str) -> str:
         SET acknowledged_by = 'ai_billing_agent',
             acknowledged_at = TIMESTAMP '{now_ts}',
             acknowledgement_reason = '{_sanitize_sql_str(reason)}'
-        WHERE CONCAT(CAST(customer_id AS STRING), '-', event_month, '-', anomaly_type) = '{anomaly_id}'
+        WHERE CONCAT(CAST(customer_id AS STRING), '-', event_month, '-', anomaly_type) = '{_sanitize_sql_str(anomaly_id)}'
     """
     result = _execute_sql(sql=sql, warehouse_id=warehouse_id,
                           action_type="ACKNOWLEDGE_ANOMALY",
                           payload={"target_table": f"{cat}.{sch}.billing_anomalies",
                                    "record_id": anomaly_id, "reason": reason},
-                          customer_id=int(customer_id) if customer_id else None,
+                          customer_id=cust_id_int,
                           session_id=None)
     if result["success"]:
         return f"SUCCESS: Anomaly {anomaly_id} acknowledged. Audit ID: {result['audit_id']}."
@@ -457,7 +487,7 @@ def update_dispute_status(dispute_id: str, new_status: str, resolution_notes: st
             updated_at = TIMESTAMP '{now_ts}'
             {f", resolved_at = TIMESTAMP '{now_ts}'" if is_terminal else ""}
             {f", resolved_amount_usd = {float(resolved_amount_usd)}" if resolved_amount_usd else ""}
-        WHERE dispute_id = '{dispute_id}'
+        WHERE dispute_id = '{_sanitize_sql_str(dispute_id)}'
     """
     result = _execute_sql(sql=sql, warehouse_id=warehouse_id,
                           action_type="UPDATE_DISPUTE",
@@ -476,6 +506,11 @@ def lookup_dispute_history(customer_id: str) -> str:
     if not warehouse_id:
         return "ERROR: warehouse_id not configured."
 
+    try:
+        cust_id_int = int(customer_id)
+    except (ValueError, TypeError):
+        return f"ERROR: customer_id must be numeric, got '{customer_id}'"
+
     from databricks.sdk.service.sql import StatementState
     w = _get_write_client()
     resp = w.statement_execution.execute_statement(
@@ -483,7 +518,7 @@ def lookup_dispute_history(customer_id: str) -> str:
             SELECT dispute_id, dispute_type, status, disputed_amount_usd,
                    resolved_amount_usd, description, created_at
             FROM {config['catalog']}.{config['schema']}.billing_disputes
-            WHERE customer_id = {int(customer_id)} ORDER BY created_at DESC LIMIT 20
+            WHERE customer_id = {cust_id_int} ORDER BY created_at DESC LIMIT 20
         """,
         warehouse_id=warehouse_id, wait_timeout="15s")
 
@@ -609,11 +644,27 @@ class LangGraphChatAgent(ChatAgent):
         """Get or build a cached agent for the given persona."""
         if persona_name not in _PERSONA_AGENTS:
             active_prompt = _PERSONA_PROMPTS.get(persona_name, system_prompt)
-            allowed = _PERSONA_TOOLS.get(persona_name, [])
-            active_tools = [t for t in tools if _tool_name(t) in allowed] if allowed else tools
+            allowed = _PERSONA_TOOLS.get(persona_name)
+            # None means persona had no tool_policy → use all tools (backwards compat)
+            # Empty list means explicitly no tools allowed → filter to empty
+            if allowed is None:
+                active_tools = tools
+            else:
+                active_tools = [t for t in tools if _tool_name(t) in allowed]
+            if not active_tools:
+                logger.warning(f"Persona '{persona_name}' has 0 active tools")
             _PERSONA_AGENTS[persona_name] = create_tool_calling_agent(
                 llm, active_tools, active_prompt)
         return _PERSONA_AGENTS[persona_name]
+
+    @staticmethod
+    def _trim_history(messages: list[dict], max_turns: int) -> list[dict]:
+        """Keep system message + last N user/assistant turn pairs to bound context size."""
+        if max_turns <= 0 or len(messages) <= max_turns * 2 + 1:
+            return messages
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        non_system = [m for m in messages if m.get("role") != "system"]
+        return system_msgs + non_system[-(max_turns * 2):]
 
     def predict(self, messages: list[ChatAgentMessage],
                 context: Optional[ChatContext] = None,
@@ -621,11 +672,14 @@ class LangGraphChatAgent(ChatAgent):
         custom_inputs = custom_inputs or {}
         persona_name = custom_inputs.get("persona", DEFAULT_PERSONA)
         if persona_name not in _PERSONA_PROMPTS:
+            logger.warning(f"Unknown persona '{persona_name}', falling back to '{DEFAULT_PERSONA}'")
             persona_name = DEFAULT_PERSONA
 
         persona_agent = self._get_persona_agent(persona_name)
 
-        request = {"messages": self._convert_messages_to_dict(messages)}
+        raw_messages = self._convert_messages_to_dict(messages)
+        trimmed = self._trim_history(raw_messages, MAX_HISTORY_TURNS)
+        request = {"messages": trimmed}
         out_messages = []
         for event in persona_agent.stream(request, stream_mode="updates"):
             for node_data in event.values():
@@ -640,11 +694,14 @@ class LangGraphChatAgent(ChatAgent):
         custom_inputs = custom_inputs or {}
         persona_name = custom_inputs.get("persona", DEFAULT_PERSONA)
         if persona_name not in _PERSONA_PROMPTS:
+            logger.warning(f"Unknown persona '{persona_name}', falling back to '{DEFAULT_PERSONA}'")
             persona_name = DEFAULT_PERSONA
 
         persona_agent = self._get_persona_agent(persona_name)
 
-        request = {"messages": self._convert_messages_to_dict(messages)}
+        raw_messages = self._convert_messages_to_dict(messages)
+        trimmed = self._trim_history(raw_messages, MAX_HISTORY_TURNS)
+        request = {"messages": trimmed}
         for event in persona_agent.stream(request, stream_mode="updates"):
             for node_data in event.values():
                 yield from (

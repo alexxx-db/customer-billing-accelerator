@@ -42,11 +42,11 @@ db = config['database']
 ANOMALY_TABLE = f"{catalog}.{db}.billing_anomalies"
 INVOICE_TABLE = f"{catalog}.{db}.invoice"
 
-# Thresholds
-ZSCORE_THRESHOLD = 2.0        # std deviations for total charge spike
-ROAMING_MULTIPLIER = 3.0      # multiplier over mean for roaming spike
-INTL_MULTIPLIER = 3.0         # multiplier over mean for international spike
-MIN_MONTHS = 2                # minimum months of history to detect anomalies
+# Thresholds (centralized in 000-config.py)
+ZSCORE_THRESHOLD = config.get('anomaly_zscore_threshold', 2.0)
+ROAMING_MULTIPLIER = config.get('anomaly_roaming_multiplier', 3.0)
+INTL_MULTIPLIER = config.get('anomaly_intl_multiplier', 3.0)
+MIN_MONTHS = config.get('anomaly_min_months', 2)
 
 print(f"Source: {INVOICE_TABLE}")
 print(f"Output: {ANOMALY_TABLE}")

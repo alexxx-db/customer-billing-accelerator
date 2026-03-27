@@ -19,7 +19,24 @@ current_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
 notebooks_dir = "/".join(current_path.split("/")[:-1])
 personas_dir = f"/Workspace{notebooks_dir}/personas"
 
-PERSONA_NAMES = ["customer_care", "finance_ops", "executive", "technical"]
+# Discover persona files dynamically instead of hardcoding names
+import os
+PERSONA_NAMES = sorted([
+    f.replace(".yaml", "")
+    for f in os.listdir(personas_dir)
+    if f.endswith(".yaml")
+])
+assert len(PERSONA_NAMES) > 0, f"No persona YAML files found in {personas_dir}"
+print(f"Discovered personas: {PERSONA_NAMES}")
+
+# Known tool names for cross-reference validation
+KNOWN_UC_TOOLS = {v.split('.')[-1] for k, v in config.items() if k.startswith('tools_')}
+# In-agent tools defined in agent.py
+KNOWN_AGENT_TOOLS = {
+    "request_write_confirmation", "acknowledge_anomaly", "create_billing_dispute",
+    "update_dispute_status", "lookup_dispute_history", "ask_billing_analytics",
+}
+ALL_KNOWN_TOOLS = KNOWN_UC_TOOLS | KNOWN_AGENT_TOOLS
 
 personas = {}
 for name in PERSONA_NAMES:
@@ -31,6 +48,14 @@ for name in PERSONA_NAMES:
         assert key in p, f"{name}.yaml missing: {key}"
     for key in ["write_access", "allowed_tools", "blocked_tools"]:
         assert key in p['tool_policy'], f"{name}.yaml tool_policy missing: {key}"
+
+    # Cross-reference: warn on tool names that don't match any known tool
+    for tool_name in p['tool_policy']['allowed_tools']:
+        if tool_name not in ALL_KNOWN_TOOLS:
+            print(f"  WARNING: {name}.yaml allowed_tools references unknown tool '{tool_name}'")
+    for tool_name in p['tool_policy']['blocked_tools']:
+        if tool_name not in ALL_KNOWN_TOOLS:
+            print(f"  WARNING: {name}.yaml blocked_tools references unknown tool '{tool_name}'")
 
     personas[name] = p
     allowed = len(p['tool_policy']['allowed_tools'])

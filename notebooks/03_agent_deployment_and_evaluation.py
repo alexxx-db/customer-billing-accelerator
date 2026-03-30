@@ -254,7 +254,10 @@ with open("config.yaml", "w") as f:
 # MAGIC ############################################
 # MAGIC # Define your LLM endpoint and system prompt
 # MAGIC ############################################
-# MAGIC llm = ChatDatabricks(endpoint=config['llm_endpoint'])
+# MAGIC MAX_AGENT_TOKENS = int(config.get('max_agent_tokens', 4096))
+# MAGIC MAX_HISTORY_TURNS = int(config.get('max_history_turns', 20))
+# MAGIC
+# MAGIC llm = ChatDatabricks(endpoint=config['llm_endpoint'], max_tokens=MAX_AGENT_TOKENS)
 # MAGIC
 # MAGIC # Inject domain-aware context into the base system prompt
 # MAGIC _base_prompt = config.get('agent_prompt', '')
@@ -325,6 +328,10 @@ with open("config.yaml", "w") as f:
 # MAGIC ###############################################################################
 # MAGIC
 # MAGIC WRITE_PENDING_PREFIX = "WRITE_PENDING"
+# MAGIC
+# MAGIC # Module-level pending write state — set by request_write_confirmation, cleared after execution.
+# MAGIC # This provides a code-level guard that write tools cannot be called without staging first.
+# MAGIC _pending_write_state: dict | None = None
 # MAGIC
 # MAGIC CONFIRM_PHRASES = {"confirm", "yes", "proceed", "approve", "go ahead", "do it"}
 # MAGIC CANCEL_PHRASES  = {"cancel", "stop", "abort", "never mind", "don't"}
@@ -430,7 +437,8 @@ with open("config.yaml", "w") as f:
 # MAGIC
 # MAGIC
 # MAGIC def _extract_pending_write(messages: list[dict]) -> dict | None:
-# MAGIC     for msg in reversed(messages[-4:]):
+# MAGIC     """Search full message history (newest-first) for the most recent WRITE_PENDING sentinel."""
+# MAGIC     for msg in reversed(messages):
 # MAGIC         content = msg.get("content", "")
 # MAGIC         if isinstance(content, str) and content.startswith(WRITE_PENDING_PREFIX):
 # MAGIC             try:
@@ -566,6 +574,8 @@ with open("config.yaml", "w") as f:
 # MAGIC
 # MAGIC     pending = {"action_type": action_type, "payload": payload,
 # MAGIC                "staged_at": datetime.now(timezone.utc).isoformat()}
+# MAGIC     global _pending_write_state
+# MAGIC     _pending_write_state = pending
 # MAGIC     return f"{WRITE_PENDING_PREFIX}|{json.dumps(pending)}"
 # MAGIC
 # MAGIC
@@ -574,6 +584,11 @@ with open("config.yaml", "w") as f:
 # MAGIC     """Acknowledge a billing anomaly. ONLY call after user confirmed via request_write_confirmation.
 # MAGIC     Sets billing_anomalies row as acknowledged with the given reason.
 # MAGIC     """
+# MAGIC     global _pending_write_state
+# MAGIC     if _pending_write_state is None or _pending_write_state.get("action_type") != "acknowledge_anomaly":
+# MAGIC         return ("BLOCKED: This action requires confirmation. "
+# MAGIC                 "Call request_write_confirmation with action_type='acknowledge_anomaly' first.")
+# MAGIC
 # MAGIC     warehouse_id = config.get("warehouse_id", "")
 # MAGIC     if not warehouse_id:
 # MAGIC         return "ERROR: warehouse_id not configured."
@@ -586,7 +601,7 @@ with open("config.yaml", "w") as f:
 # MAGIC         SET acknowledged_by = 'ai_billing_agent',
 # MAGIC             acknowledged_at = TIMESTAMP '{now_ts}',
 # MAGIC             acknowledgement_reason = '{_sanitize_sql_str(reason)}'
-# MAGIC         WHERE CONCAT(CAST(customer_id AS STRING), '-', event_month, '-', anomaly_type) = '{anomaly_id}'
+# MAGIC         WHERE anomaly_id = '{_sanitize_sql_str(anomaly_id)}'
 # MAGIC     """
 # MAGIC     result = _execute_sql(sql=sql, warehouse_id=warehouse_id,
 # MAGIC                           action_type="ACKNOWLEDGE_ANOMALY",
@@ -594,6 +609,7 @@ with open("config.yaml", "w") as f:
 # MAGIC                                    "record_id": anomaly_id, "reason": reason},
 # MAGIC                           customer_id=int(customer_id) if customer_id else None,
 # MAGIC                           session_id=None)
+# MAGIC     _pending_write_state = None
 # MAGIC     if result["success"]:
 # MAGIC         return f"SUCCESS: Anomaly {anomaly_id} acknowledged. Audit ID: {result['audit_id']}."
 # MAGIC     return f"FAILED: {result['message']} (Audit ID: {result['audit_id']})"
@@ -606,6 +622,11 @@ with open("config.yaml", "w") as f:
 # MAGIC     """Create a billing dispute. ONLY call after user confirmed.
 # MAGIC     dispute_type: BILLING_ERROR, ROAMING_DISPUTE, PLAN_MISMATCH, OVERCHARGE, UNAUTHORIZED_CHARGE.
 # MAGIC     """
+# MAGIC     global _pending_write_state
+# MAGIC     if _pending_write_state is None or _pending_write_state.get("action_type") != "create_billing_dispute":
+# MAGIC         return ("BLOCKED: This action requires confirmation. "
+# MAGIC                 "Call request_write_confirmation with action_type='create_billing_dispute' first.")
+# MAGIC
 # MAGIC     warehouse_id = config.get("warehouse_id", "")
 # MAGIC     if not warehouse_id:
 # MAGIC         return "ERROR: warehouse_id not configured."
@@ -638,6 +659,7 @@ with open("config.yaml", "w") as f:
 # MAGIC                           payload={"target_table": f"{cat}.{sch}.billing_disputes",
 # MAGIC                                    "record_id": dispute_id, "customer_id": customer_id},
 # MAGIC                           customer_id=int(customer_id), session_id=None)
+# MAGIC     _pending_write_state = None
 # MAGIC     if result["success"]:
 # MAGIC         return f"SUCCESS: Dispute {dispute_id} created (OPEN). Audit ID: {result['audit_id']}."
 # MAGIC     return f"FAILED: {result['message']} (Audit ID: {result['audit_id']})"
@@ -649,6 +671,11 @@ with open("config.yaml", "w") as f:
 # MAGIC     """Update dispute status. ONLY call after user confirmed.
 # MAGIC     new_status: UNDER_REVIEW, RESOLVED_CREDIT, RESOLVED_NO_ACTION, ESCALATED, CLOSED.
 # MAGIC     """
+# MAGIC     global _pending_write_state
+# MAGIC     if _pending_write_state is None or _pending_write_state.get("action_type") != "update_dispute_status":
+# MAGIC         return ("BLOCKED: This action requires confirmation. "
+# MAGIC                 "Call request_write_confirmation with action_type='update_dispute_status' first.")
+# MAGIC
 # MAGIC     warehouse_id = config.get("warehouse_id", "")
 # MAGIC     if not warehouse_id:
 # MAGIC         return "ERROR: warehouse_id not configured."
@@ -677,6 +704,7 @@ with open("config.yaml", "w") as f:
 # MAGIC                           payload={"target_table": f"{cat}.{sch}.billing_disputes",
 # MAGIC                                    "record_id": dispute_id, "new_status": new_status},
 # MAGIC                           customer_id=None, session_id=None)
+# MAGIC     _pending_write_state = None
 # MAGIC     if result["success"]:
 # MAGIC         return f"SUCCESS: Dispute {dispute_id} -> {new_status}. Audit ID: {result['audit_id']}."
 # MAGIC     return f"FAILED: {result['message']} (Audit ID: {result['audit_id']})"
@@ -755,6 +783,7 @@ with open("config.yaml", "w") as f:
 # MAGIC     config_ = config
 # MAGIC
 # MAGIC     def confirm_or_cancel(state: ChatAgentState, cfg: RunnableConfig):
+# MAGIC         global _pending_write_state
 # MAGIC         messages = state["messages"]
 # MAGIC         pending = _extract_pending_write(messages)
 # MAGIC
@@ -766,6 +795,7 @@ with open("config.yaml", "w") as f:
 # MAGIC         intent = _get_user_intent(messages)
 # MAGIC
 # MAGIC         if intent == "cancel":
+# MAGIC             _pending_write_state = None
 # MAGIC             action_type = pending.get("action_type", "unknown")
 # MAGIC             # Write CANCELLED audit
 # MAGIC             wh = config_.get("warehouse_id", "")
@@ -828,6 +858,23 @@ with open("config.yaml", "w") as f:
 # MAGIC                 llm, active_tools, active_prompt)
 # MAGIC         return _PERSONA_AGENTS[persona_name]
 # MAGIC
+# MAGIC     @staticmethod
+# MAGIC     def _trim_history(messages: list[dict], max_turns: int) -> list[dict]:
+# MAGIC         """Keep system messages + first N_INITIAL non-system messages (initial tool call
+# MAGIC         context) + last max_turns*2 non-system messages to bound context size while
+# MAGIC         preserving the account context established early in the conversation."""
+# MAGIC         N_INITIAL = 6
+# MAGIC         if max_turns <= 0 or len(messages) <= max_turns * 2 + 1:
+# MAGIC             return messages
+# MAGIC         system_msgs = [m for m in messages if m.get("role") == "system"]
+# MAGIC         non_system = [m for m in messages if m.get("role") != "system"]
+# MAGIC         tail_budget = max_turns * 2
+# MAGIC         if len(non_system) <= N_INITIAL + tail_budget:
+# MAGIC             return messages
+# MAGIC         initial = non_system[:N_INITIAL]
+# MAGIC         tail = non_system[-tail_budget:]
+# MAGIC         return system_msgs + initial + tail
+# MAGIC
 # MAGIC     def predict(self, messages: list[ChatAgentMessage],
 # MAGIC                 context: Optional[ChatContext] = None,
 # MAGIC                 custom_inputs: Optional[dict[str, Any]] = None) -> ChatAgentResponse:
@@ -838,7 +885,9 @@ with open("config.yaml", "w") as f:
 # MAGIC
 # MAGIC         persona_agent = self._get_persona_agent(persona_name)
 # MAGIC
-# MAGIC         request = {"messages": self._convert_messages_to_dict(messages)}
+# MAGIC         raw_messages = self._convert_messages_to_dict(messages)
+# MAGIC         trimmed = self._trim_history(raw_messages, MAX_HISTORY_TURNS)
+# MAGIC         request = {"messages": trimmed}
 # MAGIC         out_messages = []
 # MAGIC         for event in persona_agent.stream(request, stream_mode="updates"):
 # MAGIC             for node_data in event.values():
@@ -857,15 +906,17 @@ with open("config.yaml", "w") as f:
 # MAGIC
 # MAGIC         persona_agent = self._get_persona_agent(persona_name)
 # MAGIC
-# MAGIC         request = {"messages": self._convert_messages_to_dict(messages)}
+# MAGIC         raw_messages = self._convert_messages_to_dict(messages)
+# MAGIC         trimmed = self._trim_history(raw_messages, MAX_HISTORY_TURNS)
+# MAGIC         request = {"messages": trimmed}
 # MAGIC         for event in persona_agent.stream(request, stream_mode="updates"):
 # MAGIC             for node_data in event.values():
 # MAGIC                 yield from (
 # MAGIC                     ChatAgentChunk(**{"delta": msg}) for msg in node_data.get("messages", []))
 # MAGIC
 # MAGIC
-# MAGIC agent = create_tool_calling_agent(llm, tools, system_prompt)
-# MAGIC AGENT = LangGraphChatAgent(agent)
+# MAGIC _default_agent = create_tool_calling_agent(llm, tools, system_prompt)
+# MAGIC AGENT = LangGraphChatAgent(_default_agent)
 # MAGIC mlflow.models.set_model(AGENT)
 
 

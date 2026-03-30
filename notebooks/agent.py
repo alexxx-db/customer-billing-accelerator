@@ -126,6 +126,10 @@ def _tool_name(t) -> str:
 
 WRITE_PENDING_PREFIX = "WRITE_PENDING"
 
+# Module-level pending write state — set by request_write_confirmation, cleared after execution.
+# This provides a code-level guard that write tools cannot be called without staging first.
+_pending_write_state: dict | None = None
+
 CONFIRM_PHRASES = {"confirm", "yes", "proceed", "approve", "go ahead", "do it"}
 CANCEL_PHRASES  = {"cancel", "stop", "abort", "never mind", "don't"}
 
@@ -230,7 +234,8 @@ def _execute_sql(sql: str, warehouse_id: str, action_type: str,
 
 
 def _extract_pending_write(messages: list[dict]) -> dict | None:
-    for msg in reversed(messages[-4:]):
+    """Search full message history (newest-first) for the most recent WRITE_PENDING sentinel."""
+    for msg in reversed(messages):
         content = msg.get("content", "")
         if isinstance(content, str) and content.startswith(WRITE_PENDING_PREFIX):
             try:
@@ -254,6 +259,21 @@ def _get_user_intent(messages: list[dict]) -> str:
                 return "confirm"
             return "unclear"
     return "unclear"
+
+
+def _require_confirmation(action_type: str, messages: list[dict] | None = None) -> str | None:
+    """Code-level guard: returns an error string if no matching WRITE_PENDING sentinel
+    exists in the message history for the given action_type. Returns None if confirmed."""
+    # This guard is called from within tool functions which don't have access to
+    # the full message state. The sentinel check is enforced at the graph level
+    # via route_after_tools and confirm_or_cancel. This function provides an
+    # additional safety layer when messages are available.
+    if messages is not None:
+        pending = _extract_pending_write(messages)
+        if pending is None or pending.get("action_type") != action_type:
+            return (f"BLOCKED: '{action_type}' requires confirmation. "
+                    f"Call request_write_confirmation first.")
+    return None
 
 
 ###############################################################################
@@ -371,6 +391,7 @@ def request_write_confirmation(action_type: str, payload_json: str,
     human_readable_summary: what you will show the user.
     Returns a WRITE_PENDING sentinel. Then ask the user to reply CONFIRM or CANCEL.
     """
+    global _pending_write_state
     try:
         payload = json.loads(payload_json)
     except Exception as e:
@@ -378,6 +399,7 @@ def request_write_confirmation(action_type: str, payload_json: str,
 
     pending = {"action_type": action_type, "payload": payload,
                "staged_at": datetime.now(timezone.utc).isoformat()}
+    _pending_write_state = pending
     return f"{WRITE_PENDING_PREFIX}|{json.dumps(pending)}"
 
 
@@ -386,6 +408,11 @@ def acknowledge_anomaly(anomaly_id: str, reason: str, customer_id: str) -> str:
     """Acknowledge a billing anomaly. ONLY call after user confirmed via request_write_confirmation.
     Sets billing_anomalies row as acknowledged with the given reason.
     """
+    global _pending_write_state
+    if _pending_write_state is None or _pending_write_state.get("action_type") != "acknowledge_anomaly":
+        return ("BLOCKED: This action requires confirmation. "
+                "Call request_write_confirmation with action_type='acknowledge_anomaly' first.")
+
     warehouse_id = config.get("warehouse_id", "")
     if not warehouse_id:
         return "ERROR: warehouse_id not configured."
@@ -403,7 +430,7 @@ def acknowledge_anomaly(anomaly_id: str, reason: str, customer_id: str) -> str:
         SET acknowledged_by = 'ai_billing_agent',
             acknowledged_at = TIMESTAMP '{now_ts}',
             acknowledgement_reason = '{_sanitize_sql_str(reason)}'
-        WHERE CONCAT(CAST(customer_id AS STRING), '-', event_month, '-', anomaly_type) = '{_sanitize_sql_str(anomaly_id)}'
+        WHERE anomaly_id = '{_sanitize_sql_str(anomaly_id)}'
     """
     result = _execute_sql(sql=sql, warehouse_id=warehouse_id,
                           action_type="ACKNOWLEDGE_ANOMALY",
@@ -411,6 +438,7 @@ def acknowledge_anomaly(anomaly_id: str, reason: str, customer_id: str) -> str:
                                    "record_id": anomaly_id, "reason": reason},
                           customer_id=cust_id_int,
                           session_id=None)
+    _pending_write_state = None  # Clear after execution
     if result["success"]:
         return f"SUCCESS: Anomaly {anomaly_id} acknowledged. Audit ID: {result['audit_id']}."
     return f"FAILED: {result['message']} (Audit ID: {result['audit_id']})"
@@ -423,6 +451,11 @@ def create_billing_dispute(customer_id: str, dispute_type: str, description: str
     """Create a billing dispute. ONLY call after user confirmed.
     dispute_type: BILLING_ERROR, ROAMING_DISPUTE, PLAN_MISMATCH, OVERCHARGE, UNAUTHORIZED_CHARGE.
     """
+    global _pending_write_state
+    if _pending_write_state is None or _pending_write_state.get("action_type") != "create_billing_dispute":
+        return ("BLOCKED: This action requires confirmation. "
+                "Call request_write_confirmation with action_type='create_billing_dispute' first.")
+
     warehouse_id = config.get("warehouse_id", "")
     if not warehouse_id:
         return "ERROR: warehouse_id not configured."
@@ -455,6 +488,7 @@ def create_billing_dispute(customer_id: str, dispute_type: str, description: str
                           payload={"target_table": f"{cat}.{sch}.billing_disputes",
                                    "record_id": dispute_id, "customer_id": customer_id},
                           customer_id=int(customer_id), session_id=None)
+    _pending_write_state = None  # Clear after execution
     if result["success"]:
         return f"SUCCESS: Dispute {dispute_id} created (OPEN). Audit ID: {result['audit_id']}."
     return f"FAILED: {result['message']} (Audit ID: {result['audit_id']})"
@@ -466,6 +500,11 @@ def update_dispute_status(dispute_id: str, new_status: str, resolution_notes: st
     """Update dispute status. ONLY call after user confirmed.
     new_status: UNDER_REVIEW, RESOLVED_CREDIT, RESOLVED_NO_ACTION, ESCALATED, CLOSED.
     """
+    global _pending_write_state
+    if _pending_write_state is None or _pending_write_state.get("action_type") != "update_dispute_status":
+        return ("BLOCKED: This action requires confirmation. "
+                "Call request_write_confirmation with action_type='update_dispute_status' first.")
+
     warehouse_id = config.get("warehouse_id", "")
     if not warehouse_id:
         return "ERROR: warehouse_id not configured."
@@ -494,6 +533,7 @@ def update_dispute_status(dispute_id: str, new_status: str, resolution_notes: st
                           payload={"target_table": f"{cat}.{sch}.billing_disputes",
                                    "record_id": dispute_id, "new_status": new_status},
                           customer_id=None, session_id=None)
+    _pending_write_state = None  # Clear after execution
     if result["success"]:
         return f"SUCCESS: Dispute {dispute_id} -> {new_status}. Audit ID: {result['audit_id']}."
     return f"FAILED: {result['message']} (Audit ID: {result['audit_id']})"
@@ -577,6 +617,7 @@ def create_tool_calling_agent(
     config_ = config
 
     def confirm_or_cancel(state: ChatAgentState, cfg: RunnableConfig):
+        global _pending_write_state
         messages = state["messages"]
         pending = _extract_pending_write(messages)
 
@@ -588,6 +629,7 @@ def create_tool_calling_agent(
         intent = _get_user_intent(messages)
 
         if intent == "cancel":
+            _pending_write_state = None  # Clear pending state on cancel
             action_type = pending.get("action_type", "unknown")
             # Write CANCELLED audit
             wh = config_.get("warehouse_id", "")
@@ -659,12 +701,20 @@ class LangGraphChatAgent(ChatAgent):
 
     @staticmethod
     def _trim_history(messages: list[dict], max_turns: int) -> list[dict]:
-        """Keep system message + last N user/assistant turn pairs to bound context size."""
+        """Keep system messages + first N_INITIAL non-system messages (initial tool call
+        context) + last max_turns*2 non-system messages to bound context size while
+        preserving the account context established early in the conversation."""
+        N_INITIAL = 6  # Preserve first 3 tool call pairs (lookup_customer, lookup_billing, etc.)
         if max_turns <= 0 or len(messages) <= max_turns * 2 + 1:
             return messages
         system_msgs = [m for m in messages if m.get("role") == "system"]
         non_system = [m for m in messages if m.get("role") != "system"]
-        return system_msgs + non_system[-(max_turns * 2):]
+        tail_budget = max_turns * 2
+        if len(non_system) <= N_INITIAL + tail_budget:
+            return messages
+        initial = non_system[:N_INITIAL]
+        tail = non_system[-tail_budget:]
+        return system_msgs + initial + tail
 
     def predict(self, messages: list[ChatAgentMessage],
                 context: Optional[ChatContext] = None,
@@ -708,6 +758,9 @@ class LangGraphChatAgent(ChatAgent):
                     ChatAgentChunk(**{"delta": msg}) for msg in node_data.get("messages", []))
 
 
-agent = create_tool_calling_agent(llm, tools, system_prompt)
-AGENT = LangGraphChatAgent(agent)
+# Build the default persona agent (not the full 19-tool base agent).
+# The LangGraphChatAgent always routes through _get_persona_agent() which filters
+# tools per persona. Constructing a base agent with all tools is unnecessary waste.
+_default_agent = create_tool_calling_agent(llm, tools, system_prompt)
+AGENT = LangGraphChatAgent(_default_agent)
 mlflow.models.set_model(AGENT)

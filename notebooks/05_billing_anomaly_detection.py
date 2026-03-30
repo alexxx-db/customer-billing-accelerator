@@ -203,12 +203,19 @@ anomaly_columns = [
     "anomaly_detail",
 ]
 
+# anomaly_uuid and anomaly_id are added after the union in the withColumn calls below
+
 df_all_anomalies = (
     df_anomalies_total.select(anomaly_columns)
     .unionByName(df_anomalies_roaming.select(anomaly_columns))
     .unionByName(df_anomalies_intl.select(anomaly_columns))
     .unionByName(df_anomalies_overage.select(anomaly_columns))
-).withColumn("pipeline_run_at", F.current_timestamp())
+).withColumn("pipeline_run_at", F.current_timestamp()
+).withColumn("anomaly_uuid", F.expr("uuid()")
+).withColumn("anomaly_id", F.concat(
+    F.col("customer_id").cast("string"), F.lit("-"),
+    F.col("event_month"), F.lit("-"),
+    F.col("anomaly_type")))
 
 anomaly_count = df_all_anomalies.count()
 print(f"Total anomalies detected: {anomaly_count}")
@@ -223,12 +230,26 @@ df_all_anomalies.groupBy("anomaly_type").count().orderBy("count", ascending=Fals
 
 # COMMAND ----------
 
-# DBTITLE 1,Write Anomalies to Delta Table
-df_all_anomalies.write.format("delta").mode("overwrite").option(
-    "overwriteSchema", "true"
-).saveAsTable(ANOMALY_TABLE)
+# DBTITLE 1,Write Anomalies to Delta Table (MERGE to preserve acknowledgement columns)
+from delta.tables import DeltaTable
 
-print(f"Wrote {anomaly_count} anomalies to {ANOMALY_TABLE}")
+if spark.catalog.tableExists(ANOMALY_TABLE):
+    delta_table = DeltaTable.forName(spark, ANOMALY_TABLE)
+    delta_table.alias("target").merge(
+        df_all_anomalies.alias("source"),
+        "target.anomaly_id = source.anomaly_id"
+    ).whenMatchedUpdate(set={
+        "plan_name": "source.plan_name",
+        "total_charges": "source.total_charges",
+        "anomaly_detail": "source.anomaly_detail",
+        "pipeline_run_at": "source.pipeline_run_at",
+    }).whenNotMatchedInsertAll().execute()
+    print(f"Merged {anomaly_count} anomalies into {ANOMALY_TABLE}")
+else:
+    df_all_anomalies.write.format("delta").mode("overwrite").option(
+        "overwriteSchema", "true"
+    ).saveAsTable(ANOMALY_TABLE)
+    print(f"Created {ANOMALY_TABLE} with {anomaly_count} anomalies")
 
 # COMMAND ----------
 
@@ -250,6 +271,8 @@ CREATE OR REPLACE FUNCTION {catalog}.{db}.lookup_billing_anomalies(
   input_customer STRING COMMENT 'Customer ID to look up billing anomalies for. Pass empty string to get recent anomalies across all customers.'
 )
 RETURNS TABLE (
+    anomaly_id STRING,
+    anomaly_uuid STRING,
     customer_id BIGINT,
     event_month STRING,
     plan_name STRING,
@@ -258,9 +281,11 @@ RETURNS TABLE (
     anomaly_detail STRING,
     pipeline_run_at TIMESTAMP
 )
-COMMENT 'Returns billing anomalies for a customer (charge spikes, roaming spikes, international spikes, data overage spikes). Pass empty string for recent anomalies across all customers.'
+COMMENT 'Returns billing anomalies for a customer (charge spikes, roaming spikes, international spikes, data overage spikes). Pass empty string for recent anomalies across all customers. Use anomaly_id when acknowledging anomalies.'
 RETURN (
   SELECT
+    anomaly_id,
+    anomaly_uuid,
     customer_id,
     event_month,
     plan_name,

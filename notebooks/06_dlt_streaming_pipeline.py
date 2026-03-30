@@ -92,6 +92,7 @@ def billing_monthly_running():
 
     return (
         events
+        .withWatermark("event_ts", "2 days")
         .groupBy("customer_id", "device_id", "event_month", "plan_name",
                  "monthly_charges", "Roam_Data_charges_per_MB",
                  "Roam_Call_charges_per_min", "International_call_charge_per_min",

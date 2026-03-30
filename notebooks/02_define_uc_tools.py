@@ -54,21 +54,15 @@ CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA}.lookup_customer(
 )
 RETURNS TABLE (
     customer_id BIGINT,
-    customer_name STRING,
     device_id BIGINT,
-    phone_number BIGINT,
-    email STRING,
     plan BIGINT,
     contract_start_dt DATE
 )
-COMMENT 'Returns the customer data of the customer given the customer_id'
+COMMENT 'Returns the customer data of the customer given the customer_id. PII fields (customer_name, email, phone_number) are excluded from the response schema for data protection.'
 RETURN (
-  SELECT 
+  SELECT
     customer_id,
-    customer_name,
     device_id,
-    phone_number,
-    email,
     plan,
     contract_start_dt
   FROM {CATALOG}.{SCHEMA}.customers
@@ -107,16 +101,17 @@ RETURNS TABLE (
 )
 COMMENT 'Returns all billing items information for a device. Requires device_id obtained from lookup_customer.'
 RETURN (
-  SELECT 
+  SELECT
     device_id,
     event_type,
     minutes,
     bytes_transferred,
     event_ts,
-    contract_start_dt 
+    contract_start_dt
   FROM {CATALOG}.{SCHEMA}.billing_items
   WHERE device_id = CAST(input_id AS DECIMAL)
   ORDER BY event_ts DESC
+  LIMIT 100
 );
 """
 spark.sql(sqlstr_lkp_bill_items)

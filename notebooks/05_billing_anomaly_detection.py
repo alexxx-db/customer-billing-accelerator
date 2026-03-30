@@ -233,18 +233,31 @@ df_all_anomalies.groupBy("anomaly_type").count().orderBy("count", ascending=Fals
 # DBTITLE 1,Write Anomalies to Delta Table (MERGE to preserve acknowledgement columns)
 from delta.tables import DeltaTable
 
+# Enable schema auto-merge so new columns (anomaly_uuid, anomaly_id) are added on first MERGE
+spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
+
 if spark.catalog.tableExists(ANOMALY_TABLE):
-    delta_table = DeltaTable.forName(spark, ANOMALY_TABLE)
-    delta_table.alias("target").merge(
-        df_all_anomalies.alias("source"),
-        "target.anomaly_id = source.anomaly_id"
-    ).whenMatchedUpdate(set={
-        "plan_name": "source.plan_name",
-        "total_charges": "source.total_charges",
-        "anomaly_detail": "source.anomaly_detail",
-        "pipeline_run_at": "source.pipeline_run_at",
-    }).whenNotMatchedInsertAll().execute()
-    print(f"Merged {anomaly_count} anomalies into {ANOMALY_TABLE}")
+    # Check if table has the anomaly_id column (needed for MERGE key)
+    existing_cols = [f.name for f in spark.table(ANOMALY_TABLE).schema.fields]
+    if "anomaly_id" not in existing_cols:
+        # Table predates anomaly_id column — must rebuild
+        print("Existing table missing anomaly_id column. Rebuilding with full schema.")
+        df_all_anomalies.write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).saveAsTable(ANOMALY_TABLE)
+        print(f"Rebuilt {ANOMALY_TABLE} with {anomaly_count} anomalies")
+    else:
+        delta_table = DeltaTable.forName(spark, ANOMALY_TABLE)
+        delta_table.alias("target").merge(
+            df_all_anomalies.alias("source"),
+            "target.anomaly_id = source.anomaly_id"
+        ).whenMatchedUpdate(set={
+            "plan_name": "source.plan_name",
+            "total_charges": "source.total_charges",
+            "anomaly_detail": "source.anomaly_detail",
+            "pipeline_run_at": "source.pipeline_run_at",
+        }).whenNotMatchedInsertAll().execute()
+        print(f"Merged {anomaly_count} anomalies into {ANOMALY_TABLE}")
 else:
     df_all_anomalies.write.format("delta").mode("overwrite").option(
         "overwriteSchema", "true"

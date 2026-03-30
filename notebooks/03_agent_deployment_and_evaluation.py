@@ -275,7 +275,7 @@ with open("config.yaml", "w") as f:
 # MAGIC from pathlib import Path as _Path
 # MAGIC
 # MAGIC _PERSONA_PROMPTS: dict[str, str] = {}
-# MAGIC _PERSONA_TOOLS: dict[str, list[str]] = {}
+# MAGIC _PERSONA_TOOLS: dict[str, list[str] | None] = {}  # None = no policy (all tools); [] = explicitly empty
 # MAGIC _PERSONA_AGENTS: dict[str, CompiledGraph] = {}
 # MAGIC
 # MAGIC
@@ -301,7 +301,10 @@ with open("config.yaml", "w") as f:
 # MAGIC                 with open(yaml_path) as f:
 # MAGIC                     p = _yaml.safe_load(f)
 # MAGIC                 _PERSONA_PROMPTS[name] = p.get("system_prompt", "")
-# MAGIC                 _PERSONA_TOOLS[name] = p.get("tool_policy", {}).get("allowed_tools", [])
+# MAGIC                 tool_policy = p.get("tool_policy")
+# MAGIC                 # None means no tool_policy section at all -> all tools allowed
+# MAGIC                 # Empty list means explicitly restricted to zero tools
+# MAGIC                 _PERSONA_TOOLS[name] = tool_policy.get("allowed_tools", []) if tool_policy else None
 # MAGIC             except Exception as e:
 # MAGIC                 print(f"WARNING: Could not load persona {name}: {e}")
 # MAGIC
@@ -567,6 +570,7 @@ with open("config.yaml", "w") as f:
 # MAGIC     human_readable_summary: what you will show the user.
 # MAGIC     Returns a WRITE_PENDING sentinel. Then ask the user to reply CONFIRM or CANCEL.
 # MAGIC     """
+# MAGIC     global _pending_write_state
 # MAGIC     try:
 # MAGIC         payload = json.loads(payload_json)
 # MAGIC     except Exception as e:
@@ -574,7 +578,6 @@ with open("config.yaml", "w") as f:
 # MAGIC
 # MAGIC     pending = {"action_type": action_type, "payload": payload,
 # MAGIC                "staged_at": datetime.now(timezone.utc).isoformat()}
-# MAGIC     global _pending_write_state
 # MAGIC     _pending_write_state = pending
 # MAGIC     return f"{WRITE_PENDING_PREFIX}|{json.dumps(pending)}"
 # MAGIC
@@ -852,8 +855,13 @@ with open("config.yaml", "w") as f:
 # MAGIC         """Get or build a cached agent for the given persona."""
 # MAGIC         if persona_name not in _PERSONA_AGENTS:
 # MAGIC             active_prompt = _PERSONA_PROMPTS.get(persona_name, system_prompt)
-# MAGIC             allowed = _PERSONA_TOOLS.get(persona_name, [])
-# MAGIC             active_tools = [t for t in tools if _tool_name(t) in allowed] if allowed else tools
+# MAGIC             allowed = _PERSONA_TOOLS.get(persona_name)
+# MAGIC             # None means persona had no tool_policy -> use all tools (backwards compat)
+# MAGIC             # Empty list means explicitly no tools allowed -> filter to empty
+# MAGIC             if allowed is None:
+# MAGIC                 active_tools = tools
+# MAGIC             else:
+# MAGIC                 active_tools = [t for t in tools if _tool_name(t) in allowed]
 # MAGIC             _PERSONA_AGENTS[persona_name] = create_tool_calling_agent(
 # MAGIC                 llm, active_tools, active_prompt)
 # MAGIC         return _PERSONA_AGENTS[persona_name]

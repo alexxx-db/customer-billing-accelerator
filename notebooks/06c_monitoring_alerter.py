@@ -43,10 +43,10 @@ SELECT
   b.anomaly_type,
   b.anomaly_detail,
   b.pipeline_run_at,
-  CONCAT(CAST(b.customer_id AS STRING), '-', b.event_month, '-', b.anomaly_type) AS anomaly_id
+  b.anomaly_id
 FROM {catalog}.{schema}.billing_anomalies b
 LEFT JOIN {catalog}.{schema}.billing_monitoring_state m
-  ON CONCAT(CAST(b.customer_id AS STRING), '-', b.event_month, '-', b.anomaly_type) = m.anomaly_id
+  ON b.anomaly_id = m.anomaly_id
   AND m.was_delivered = true
 WHERE m.anomaly_id IS NULL
 ORDER BY b.total_charges DESC

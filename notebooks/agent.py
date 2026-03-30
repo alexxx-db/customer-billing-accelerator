@@ -261,21 +261,6 @@ def _get_user_intent(messages: list[dict]) -> str:
     return "unclear"
 
 
-def _require_confirmation(action_type: str, messages: list[dict] | None = None) -> str | None:
-    """Code-level guard: returns an error string if no matching WRITE_PENDING sentinel
-    exists in the message history for the given action_type. Returns None if confirmed."""
-    # This guard is called from within tool functions which don't have access to
-    # the full message state. The sentinel check is enforced at the graph level
-    # via route_after_tools and confirm_or_cancel. This function provides an
-    # additional safety layer when messages are available.
-    if messages is not None:
-        pending = _extract_pending_write(messages)
-        if pending is None or pending.get("action_type") != action_type:
-            return (f"BLOCKED: '{action_type}' requires confirmation. "
-                    f"Call request_write_confirmation first.")
-    return None
-
-
 ###############################################################################
 ## Define tools
 ###############################################################################

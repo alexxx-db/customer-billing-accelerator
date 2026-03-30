@@ -55,15 +55,15 @@ CREATE OR REPLACE VIEW {catalog}.{schema}.billing_monitoring_summary AS
 SELECT
   b.event_month,
   b.anomaly_type,
-  COUNT(DISTINCT CONCAT(CAST(b.customer_id AS STRING), '-', b.event_month, '-', b.anomaly_type)) AS total_anomalies,
+  COUNT(DISTINCT b.anomaly_id)                                                    AS total_anomalies,
   COUNT(DISTINCT m.anomaly_id)                                                    AS alerted_count,
-  COUNT(DISTINCT CONCAT(CAST(b.customer_id AS STRING), '-', b.event_month, '-', b.anomaly_type))
+  COUNT(DISTINCT b.anomaly_id)
     - COUNT(DISTINCT m.anomaly_id)                                                AS pending_alert_count,
   MAX(b.pipeline_run_at)                                                          AS last_detection_ts,
   MAX(m.alert_sent_ts)                                                            AS last_alert_ts
 FROM {catalog}.{schema}.billing_anomalies b
 LEFT JOIN {catalog}.{schema}.billing_monitoring_state m
-  ON CONCAT(CAST(b.customer_id AS STRING), '-', b.event_month, '-', b.anomaly_type) = m.anomaly_id
+  ON b.anomaly_id = m.anomaly_id
   AND m.was_delivered = true
 GROUP BY b.event_month, b.anomaly_type
 """)

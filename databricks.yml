@@ -1,0 +1,41 @@
+# Declarative Automation Bundle — deploys the Dash chatbot as a Databricks App.
+# Prerequisites: serving endpoint exists (notebook 03_agent_deployment_and_evaluation).
+#
+# Local:
+#   databricks bundle validate
+#   databricks bundle deploy
+#   databricks bundle run billing_chatbot_app
+#   databricks apps deploy billing-chatbot --profile <profile>   # if compute not started
+#
+# Override endpoint name:
+#   databricks bundle deploy --var serving_endpoint_name=my_agent_endpoint
+
+bundle:
+  name: customer_billing_accelerator
+
+variables:
+  environment:
+    description: Deployment label (used by CI and optional future resources)
+    default: dev
+  serving_endpoint_name:
+    description: Model serving endpoint name for the billing agent (UC-registered name)
+    default: ai_customer_billing_agent
+
+resources:
+  apps:
+    billing_chatbot_app:
+      name: billing-chatbot
+      description: Dash chat UI for the customer billing AI agent
+      source_code_path: ./apps/dash-chatbot-app
+      resources:
+        - name: serving-endpoint
+          serving_endpoint:
+            name: ${var.serving_endpoint_name}
+            permission: CAN_QUERY
+
+targets:
+  dev:
+    mode: development
+    default: true
+  prod:
+    mode: production

@@ -1,0 +1,9 @@
+# In Compute → App resources, add your agent serving endpoint with key "serving-endpoint"
+# and permission CAN QUERY (matches valueFrom below).
+command:
+  - python
+  - app.py
+
+env:
+  - name: SERVING_ENDPOINT
+    valueFrom: serving-endpoint

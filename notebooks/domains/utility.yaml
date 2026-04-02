@@ -1,0 +1,99 @@
+domain:
+  name: utility
+  display_name: "Utility / Energy"
+  industry: "Energy & Utilities"
+  description: >
+    Monthly billing for utility customers. Charges include fixed service charge,
+    tiered energy usage, demand charges (peak kW), fuel adjustment factors,
+    distribution fees, and regulatory surcharges.
+
+agent:
+  role_name: "Utility Billing Support Agent"
+  customer_noun: "customer"
+  account_noun: "service account"
+  service_noun: "rate plan"
+  charge_vocabulary:
+    overage: "excess usage"
+    premium_1: "peak demand"
+    premium_2: "fuel adjustment"
+
+tables:
+  billing_summary:
+    source_table: "utility_invoice"
+    customer_id_col: "account_number"
+    event_month_col: "billing_period"
+    base_charge_col: "fixed_service_charge"
+    total_charges_col: "total_bill_amount"
+    plan_name_col: "rate_plan_name"
+    charge_mappings:
+      charge_category_1:
+        source_col: "tiered_energy_charges"
+        label: "Energy Usage (kWh)"
+      charge_category_2:
+        source_col: "demand_charges"
+        label: "Peak Demand (kW)"
+      charge_category_3:
+        source_col: "fuel_adjustment_charges"
+        label: "Fuel Adjustment"
+      charge_category_4:
+        source_col: "distribution_charges"
+        label: "Distribution Fees"
+      charge_category_5:
+        source_col: "regulatory_surcharges"
+        label: "Regulatory Surcharges"
+      charge_category_6:
+        source_col: "late_payment_charges"
+        label: "Late Payment Fees"
+
+  customer_profile:
+    source_table: "utility_customers"
+    customer_id_col: "account_number"
+    customer_name_col: "customer_name"
+    account_identifier_col: "service_address"
+    product_identifier_col: "meter_id"
+    plan_key_col: "rate_plan_key"
+    subscription_start_col: "service_start_date"
+
+  service_catalog:
+    source_table: "utility_rate_plans"
+    plan_key_col: "rate_plan_key"
+    plan_id_col: "rate_plan_code"
+    plan_name_col: "rate_plan_name"
+    contract_months_col: "contract_duration_months"
+    base_charge_col: "fixed_monthly_charge"
+    feature_1_label: "Included kWh"
+    feature_1_col: "included_kwh"
+    feature_2_label: "Demand Limit (kW)"
+    feature_2_col: "demand_limit_kw"
+    overage_rate_col: "energy_per_kwh_rate"
+    premium_rate_1_col: "demand_per_kw_rate"
+    premium_rate_2_col: "fuel_adjustment_factor"
+
+  billing_events:
+    source_table: "utility_meter_reads"
+    product_identifier_col: "meter_id"
+    event_category_col: "read_type"
+    usage_quantity_col: "kwh_consumed"
+    data_quantity_col: "peak_demand_kw"
+    event_ts_col: "read_timestamp"
+    subscription_start_col: "service_start_date"
+
+confidential_fields:
+  - "customer_name"
+  - "service_address"
+  - "account_identifier"
+  - "product_identifier"
+
+genie_space:
+  description: >
+    Monthly billing analytics for utility customers. Includes invoice summaries
+    (fixed charge + tiered energy + demand + fuel adjustment + distribution + regulatory),
+    customer profiles (rate plan, service start date), and rate plan catalog
+    (pricing, included kWh, demand limits, overage rates).
+    Tables join on rate_plan_key. Invoice has monthly granularity per account.
+  sample_questions:
+    - "Which customers have the highest demand charges this month?"
+    - "What is the average monthly bill by rate plan?"
+    - "How many customers exceeded their included kWh last month?"
+    - "What is the month-over-month trend in fuel adjustment charges?"
+    - "Which rate plan has the most customers with late payment fees?"

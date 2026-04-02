@@ -1,0 +1,98 @@
+domain:
+  name: saas
+  display_name: "SaaS / Subscription"
+  industry: "Technology"
+  description: >
+    Monthly billing for SaaS platform subscribers. Charges include base subscription fee,
+    API call overages, storage overages, seat overages, marketplace app charges, and
+    professional services add-ons.
+
+agent:
+  role_name: "Subscription Support Agent"
+  customer_noun: "customer"
+  account_noun: "subscription"
+  service_noun: "plan tier"
+  charge_vocabulary:
+    overage: "usage overage"
+    premium_1: "marketplace"
+    premium_2: "professional services"
+
+tables:
+  billing_summary:
+    source_table: "saas_invoice"
+    customer_id_col: "account_id"
+    event_month_col: "billing_month"
+    base_charge_col: "subscription_fee"
+    total_charges_col: "total_charges"
+    plan_name_col: "plan_tier"
+    charge_mappings:
+      charge_category_1:
+        source_col: "api_call_overage_charges"
+        label: "API Call Overage"
+      charge_category_2:
+        source_col: "storage_overage_charges"
+        label: "Storage Overage"
+      charge_category_3:
+        source_col: "seat_overage_charges"
+        label: "Seat Overage"
+      charge_category_4:
+        source_col: "marketplace_charges"
+        label: "Marketplace Apps"
+      charge_category_5:
+        source_col: "professional_services_charges"
+        label: "Professional Services"
+      charge_category_6:
+        source_col: "support_tier_charges"
+        label: "Premium Support"
+
+  customer_profile:
+    source_table: "saas_accounts"
+    customer_id_col: "account_id"
+    customer_name_col: "company_name"
+    account_identifier_col: "license_key"
+    product_identifier_col: "subscription_id"
+    plan_key_col: "plan_id"
+    subscription_start_col: "activation_date"
+
+  service_catalog:
+    source_table: "saas_plans"
+    plan_key_col: "plan_id"
+    plan_id_col: "plan_code"
+    plan_name_col: "plan_tier_name"
+    contract_months_col: "commitment_months"
+    base_charge_col: "monthly_price_usd"
+    feature_1_label: "API Calls (monthly)"
+    feature_1_col: "included_api_calls"
+    feature_2_label: "Storage (GB)"
+    feature_2_col: "included_storage_gb"
+    overage_rate_col: "api_overage_per_1000_calls"
+    premium_rate_1_col: "marketplace_transaction_fee_pct"
+    premium_rate_2_col: "ps_hourly_rate"
+
+  billing_events:
+    source_table: "saas_usage_events"
+    product_identifier_col: "subscription_id"
+    event_category_col: "event_type"
+    usage_quantity_col: "api_calls"
+    data_quantity_col: "storage_bytes"
+    event_ts_col: "event_timestamp"
+    subscription_start_col: "activation_date"
+
+confidential_fields:
+  - "company_name"
+  - "contact_email"
+  - "account_identifier"
+  - "product_identifier"
+
+genie_space:
+  description: >
+    Monthly billing analytics for SaaS platform subscribers. Includes invoice summaries
+    (subscription fee + API overage + storage + seat + marketplace charges), account profiles
+    (plan tier, activation date), and plan catalog (pricing, included limits, overage rates).
+    Tables join on plan_id. Invoice has monthly granularity per account.
+  sample_questions:
+    - "Which accounts have the highest API overage charges this month?"
+    - "What is the average monthly total charge by plan tier?"
+    - "How many accounts exceeded their storage limit last month?"
+    - "What is the month-over-month trend in marketplace charges?"
+    - "Which plan tier has the most accounts with overages?"

@@ -158,7 +158,24 @@ if _genie_space_id:
 
 
 # --- In-Agent Write-Back Tools ---
+# Thread-safe per-token store. Tokens are 8-char UUIDs, so collisions across
+# concurrent sessions are negligible. TTL cleanup runs on each staging call
+# to prevent unbounded growth from abandoned tokens.
+import threading as _threading
+
 _pending_writes: dict[str, dict] = {}
+_pending_writes_lock = _threading.Lock()
+_TOKEN_TTL_SECONDS = 600  # 10-minute expiry for unconfirmed tokens
+
+
+def _cleanup_expired_tokens() -> None:
+    now = datetime.now(timezone.utc)
+    expired = [
+        k for k, v in _pending_writes.items()
+        if (now - datetime.fromisoformat(v["ts"])).total_seconds() > _TOKEN_TTL_SECONDS
+    ]
+    for k in expired:
+        _pending_writes.pop(k, None)
 
 
 @tool
@@ -171,11 +188,13 @@ def request_write_confirmation(
     customer_id: customer ID
     reason: justification for the action"""
     token = str(uuid.uuid4())[:8]
-    _pending_writes[token] = dict(
-        action=action, target_id=target_id,
-        customer_id=customer_id, reason=reason,
-        ts=datetime.now(timezone.utc).isoformat(),
-    )
+    with _pending_writes_lock:
+        _cleanup_expired_tokens()
+        _pending_writes[token] = dict(
+            action=action, target_id=target_id,
+            customer_id=customer_id, reason=reason,
+            ts=datetime.now(timezone.utc).isoformat(),
+        )
     summary = f"Action: {action} | Target: {target_id} | Customer: {customer_id}"
     if reason:
         summary += f" | Reason: {reason}"
@@ -189,9 +208,10 @@ def request_write_confirmation(
 def confirm_write_operation(token: str) -> str:
     """Execute a previously staged write after user confirms.
     token: the confirmation token from request_write_confirmation"""
-    if token not in _pending_writes:
-        return "Invalid or expired token. Please re-stage the operation."
-    op = _pending_writes.pop(token)
+    with _pending_writes_lock:
+        if token not in _pending_writes:
+            return "Invalid or expired token. Please re-stage the operation."
+        op = _pending_writes.pop(token)
     return _execute_write(op)
 
 
@@ -301,7 +321,8 @@ def _execute_write(op: dict) -> str:
 @tool
 def cancel_write_operation(token: str) -> str:
     """Cancel a previously staged write operation."""
-    removed = _pending_writes.pop(token, None)
+    with _pending_writes_lock:
+        removed = _pending_writes.pop(token, None)
     return "Operation cancelled." if removed else "No pending operation found for that token."
 
 

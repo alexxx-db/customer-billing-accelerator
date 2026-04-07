@@ -2,9 +2,11 @@ import os
 import dash
 import dash_bootstrap_components as dbc
 from DatabricksChatbot import DatabricksChatbot
+
 # Ensure environment variable is set correctly
 serving_endpoint = os.getenv('SERVING_ENDPOINT')
-assert serving_endpoint, 'SERVING_ENDPOINT must be set in app.yaml.'
+if not serving_endpoint:
+    raise RuntimeError('SERVING_ENDPOINT must be set in app.yaml.')
 
 # Initialize the Dash app with a clean theme
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
@@ -20,4 +22,5 @@ app.layout = dbc.Container([
 ], fluid=True)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    debug = os.getenv('APP_DEBUG', 'false').lower() == 'true'
+    app.run(debug=debug)

@@ -26,8 +26,6 @@ except Exception as e:
 
 # DBTITLE 1,Add acknowledgement columns to billing_anomalies
 for col_name, col_type, comment in [
-    ("anomaly_uuid",          "STRING",    "Surrogate key (UUID) for write-back operations"),
-    ("anomaly_id",            "STRING",    "Composite key: customer_id-event_month-anomaly_type"),
     ("acknowledged_by",       "STRING",    "Who acknowledged"),
     ("acknowledged_at",       "TIMESTAMP", "When acknowledged"),
     ("acknowledgement_reason","STRING",    "Why acknowledged or dismissed"),

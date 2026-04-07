@@ -73,7 +73,8 @@ print(f"Created view {catalog}.{db}.invoice_analytics (PII columns excluded)")
 # COMMAND ----------
 
 # DBTITLE 1,Create or Update Genie Space
-import requests
+import json
+import uuid
 from databricks.sdk import WorkspaceClient
 
 w = WorkspaceClient()
@@ -84,48 +85,65 @@ table_identifiers = config['genie_space_tables']
 warehouse_id = config['warehouse_id']
 sample_questions = config['genie_space_sample_questions']
 
-api_base = f"{w.config.host}/api/2.0"
-headers = {}
-w.config.authenticate(headers)
+# Validate that referenced tables exist (Genie API rejects missing tables)
+catalog = config['catalog']
+db = config['database']
+_existing = {r.tableName for r in spark.sql(f"SHOW TABLES IN {catalog}.{db}").collect()}
+_valid = [t for t in table_identifiers if t.split('.')[-1] in _existing]
+_skipped = [t for t in table_identifiers if t.split('.')[-1] not in _existing]
+if _skipped:
+    print(f"Skipping {len(_skipped)} tables not yet created: {', '.join(t.split('.')[-1] for t in _skipped)}")
+table_identifiers = sorted(_valid)
+assert table_identifiers, "No valid tables found — create the upstream tables first."
+print(f"Creating Genie Space with {len(table_identifiers)} tables")
+
+# Build the serialized_space payload in GenieSpaceExport format
+serialized_space = json.dumps({
+    "version": 2,
+    "config": {
+        "sample_questions": [
+            {"id": uuid.uuid4().hex, "question": [q]}
+            for q in sample_questions
+        ],
+    },
+    "data_sources": {
+        "tables": [
+            {"identifier": t} for t in table_identifiers
+        ],
+    },
+})
 
 # Check if a Genie Space with this name already exists
 existing_space_id = None
 try:
-    resp = requests.get(f"{api_base}/genie/spaces", headers=headers)
-    resp.raise_for_status()
-    for space in resp.json().get("spaces", []):
-        if space.get("title") == space_name:
-            existing_space_id = space["space_id"]
-            print(f"Found existing Genie Space '{space_name}' with ID: {existing_space_id}")
-            break
+    spaces_resp = w.genie.list_spaces()
+    if hasattr(spaces_resp, 'spaces') and spaces_resp.spaces:
+        for space in spaces_resp.spaces:
+            if space.title == space_name:
+                existing_space_id = space.space_id
+                print(f"Found existing Genie Space '{space_name}' with ID: {existing_space_id}")
+                break
 except Exception as e:
     print(f"Could not list existing spaces: {e}. Will create a new one.")
 
-space_payload = {
-    "title": space_name,
-    "description": space_description,
-    "table_identifiers": table_identifiers,
-    "warehouse_id": warehouse_id,
-    "sample_questions": sample_questions,
-}
-
 if existing_space_id:
-    resp = requests.put(
-        f"{api_base}/genie/spaces/{existing_space_id}",
-        headers=headers,
-        json=space_payload,
+    result = w.genie.update_space(
+        space_id=existing_space_id,
+        title=space_name,
+        description=space_description,
+        warehouse_id=warehouse_id,
+        serialized_space=serialized_space,
     )
-    resp.raise_for_status()
     space_id = existing_space_id
     print(f"Updated existing Genie Space: {space_id}")
 else:
-    resp = requests.post(
-        f"{api_base}/genie/spaces",
-        headers=headers,
-        json=space_payload,
+    result = w.genie.create_space(
+        warehouse_id=warehouse_id,
+        serialized_space=serialized_space,
+        title=space_name,
+        description=space_description,
     )
-    resp.raise_for_status()
-    space_id = resp.json()["space_id"]
+    space_id = result.space_id
     print(f"Created new Genie Space: {space_id}")
 
 config['genie_space_id'] = space_id

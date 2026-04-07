@@ -18,9 +18,11 @@
 
 # COMMAND ----------
 
-# DBTITLE 1,Determine Track
-import yaml
+# MAGIC %pip install PyYAML
 
+# COMMAND ----------
+
+# DBTITLE 1,Determine Track
 USE_REAL_FEDERATION = bool(config.get("erp_connection_host", ""))
 
 print(f"Federation track: {'REAL (external DB)' if USE_REAL_FEDERATION else 'SIMULATION (synthetic data)'}")

@@ -1,0 +1,9 @@
+# Gradio and pandas are pre-installed in the Databricks Apps runtime.
+# List only ADDITIONAL packages your app needs here.
+# The runtime provides: gradio 4.44.0, pandas, databricks-sdk, etc.
+
+# Uncomment as needed:
+# databricks-sql-connector>=3.0.0
+# databricks-sdk>=0.30.0
+# requests>=2.31.0
+# python-dotenv>=1.0.0

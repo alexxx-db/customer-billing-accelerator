@@ -39,7 +39,7 @@ UNIQUE_CUSTOMERS = config['UNIQUE_CUSTOMERS']
 # DBTITLE 1,Generate AR Master Data
 ar_dataspec = (
     dg.DataGenerator(spark, rows=UNIQUE_CUSTOMERS, partitions=8)
-    .withColumn("customer_id", "decimal(10)", minValue=CUSTOMER_MIN, uniqueValues=UNIQUE_CUSTOMERS)
+    .withColumn("customer_id", "long", minValue=CUSTOMER_MIN, uniqueValues=UNIQUE_CUSTOMERS)
     .withColumn("erp_account_id", "string", format="ACC-%07d", baseColumn="customer_id")
     .withColumn("account_type", "string",
                 values=["RESIDENTIAL", "BUSINESS_SMB", "BUSINESS_ENTERPRISE", "GOVERNMENT"],
@@ -81,9 +81,9 @@ MONTHS = [f"2024-{str(m).zfill(2)}" for m in range(1, 13)]
 
 order_dataspec = (
     dg.DataGenerator(spark, rows=UNIQUE_CUSTOMERS * 8, partitions=8)
-    .withColumn("customer_id", "decimal(10)", minValue=CUSTOMER_MIN, uniqueValues=UNIQUE_CUSTOMERS)
+    .withColumn("customer_id", "long", minValue=CUSTOMER_MIN, uniqueValues=UNIQUE_CUSTOMERS)
     .withColumn("order_month", "string", values=MONTHS, random=True)
-    .withColumn("erp_order_id", "string", format="ORD-%010d", baseColumn=["customer_id", "order_month"])
+    .withColumn("erp_order_id", "string", format="ORD-%010d", baseColumn="customer_id")
     .withColumn("recognized_revenue_usd", "decimal(12,2)", minValue=10.0, maxValue=300.0, random=True)
     .withColumn("order_type", "string",
                 values=["RECURRING", "ONE_TIME", "ADJUSTMENT", "CREDIT"],

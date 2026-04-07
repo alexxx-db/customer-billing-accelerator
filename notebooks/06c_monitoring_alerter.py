@@ -43,10 +43,10 @@ SELECT
   b.anomaly_type,
   b.anomaly_detail,
   b.pipeline_run_at,
-  b.anomaly_id
+  CONCAT(CAST(b.customer_id AS STRING), '-', b.event_month, '-', b.anomaly_type) AS anomaly_id
 FROM {catalog}.{schema}.billing_anomalies b
 LEFT JOIN {catalog}.{schema}.billing_monitoring_state m
-  ON b.anomaly_id = m.anomaly_id
+  ON CONCAT(CAST(b.customer_id AS STRING), '-', b.event_month, '-', b.anomaly_type) = m.anomaly_id
   AND m.was_delivered = true
 WHERE m.anomaly_id IS NULL
 ORDER BY b.total_charges DESC
@@ -108,7 +108,8 @@ for _, row in unalerted_pd.iterrows():
     })
 
 if alert_records:
-    alerts_df = spark.createDataFrame(alert_records)
+    target_schema = spark.table(f"{catalog}.{schema}.billing_monitoring_state").schema
+    alerts_df = spark.createDataFrame(alert_records, schema=target_schema)
     alerts_df.write.mode("append").saveAsTable(
         f"{catalog}.{schema}.billing_monitoring_state"
     )

@@ -64,18 +64,38 @@ print(f"Ingestion window: {start_date} -> {end_date}")
 # COMMAND ----------
 
 # DBTITLE 1,Derive workspace_id
-workspace_id = spark.conf.get("spark.databricks.clusterUsageTags.orgId", "")
+# Resolve workspace_id — needed to filter system tables to this workspace.
+# spark.conf clusterUsageTags don't exist on serverless, so we cascade:
+#   1. Notebook context (works on all compute types incl. serverless)
+#   2. Databricks SDK
+#   3. spark.conf fallback (works on some runtimes)
+workspace_id = ""
+
+# Method 1: notebook context
+try:
+    workspace_id = dbutils.notebook.entry_point.getDbutils().notebook().getContext().workspaceId().getOrElse(None) or ""
+except Exception:
+    pass
+
+# Method 2: Databricks SDK
 if not workspace_id:
-    from databricks.sdk import WorkspaceClient
     try:
+        from databricks.sdk import WorkspaceClient
         workspace_id = str(WorkspaceClient().get_workspace_id())
     except Exception:
-        workspace_id = ""
+        pass
 
+# Method 3: spark conf (classic clusters)
 if not workspace_id:
-    print("WARNING: Could not determine workspace_id. System tables won't be filtered by workspace.")
-else:
+    try:
+        workspace_id = spark.conf.get("spark.databricks.workspaceId", "")
+    except Exception:
+        pass
+
+if workspace_id:
     print(f"Workspace ID: {workspace_id}")
+else:
+    print("WARNING: Could not determine workspace_id. System tables won't be filtered by workspace.")
 
 # COMMAND ----------
 
@@ -279,7 +299,7 @@ if availability["billing_usage"]:
         F.col("usage_metadata")["warehouse_id"].alias("warehouse_id"),
         "usage_type",
         F.current_timestamp().alias("ingested_at"),
-    ).cache()
+    )
 
     dbu_count = dbu_bronze.count()
 
@@ -288,40 +308,51 @@ if availability["billing_usage"]:
         dbu_bronze.alias("s"), "t.record_id = s.record_id"
     ).whenNotMatchedInsertAll().execute()
 
-    dbu_bronze.unpersist()
     print(f"telemetry_dbu_usage: {dbu_count} records")
 else:
     print("SKIP: system.billing.usage not accessible")
 
 # COMMAND ----------
 
-# DBTITLE 1,Bronze: telemetry_job_runs
+from pyspark.sql import functions as F
+
 jobs_count = 0
 if availability["job_run_timeline"] and availability["jobs"]:
-    runs = spark.table("system.lakeflow.job_run_timeline").filter(
-        (F.to_date("start_time") >= F.lit(str(start_date))) &
-        (F.to_date("start_time") <= F.lit(str(end_date)))
+    # 1. Alias the dataframes immediately to prevent resolution errors
+    runs = spark.table("system.lakeflow.job_run_timeline").alias("r").filter(
+        (F.to_date("period_start_time") >= F.lit(str(start_date))) &
+        (F.to_date("period_start_time") <= F.lit(str(end_date)))
     )
+    
     if workspace_id:
         runs = runs.filter(F.col("workspace_id") == workspace_id)
 
-    jobs_meta = spark.table("system.lakeflow.jobs")
+    jobs_meta = spark.table("system.lakeflow.jobs").alias("j")
     if workspace_id:
         jobs_meta = jobs_meta.filter(F.col("workspace_id") == workspace_id)
+    
+    # Keep the necessary columns for the join and final select
     jobs_meta = jobs_meta.select("job_id", "name", "creator_user_name")
 
     job_runs = (
         runs.join(jobs_meta, "job_id", "left")
         .select(
-            runs.workspace_id, "job_id",
+            # 2. Use F.col() to explicitly reference the columns
+            F.col("r.workspace_id"), 
+            F.col("job_id"),
             F.col("name").alias("job_name"),
-            "run_id", "run_name", "run_type",
-            "start_time", "end_time", "result_state",
-            (F.col("run_duration_ms") / 60000).alias("run_duration_minutes"),
-            "trigger_type", jobs_meta.creator_user_name,
-            F.current_timestamp().alias("ingested_at"),
+            F.col("run_id"), 
+            F.col("run_name"), 
+            F.col("run_type"),
+            F.col("period_start_time").alias("start_time"), 
+            F.col("period_end_time").alias("end_time"), 
+            F.col("result_state"),
+            (F.col("run_duration_seconds") / 60).alias("run_duration_minutes"),
+            F.col("r.trigger_type"), 
+            F.col("creator_user_name"),
+            F.current_timestamp().alias("ingested_at")
         )
-    ).cache()
+    )
 
     jobs_count = job_runs.count()
 
@@ -330,7 +361,6 @@ if availability["job_run_timeline"] and availability["jobs"]:
         job_runs.alias("s"), "t.run_id = s.run_id"
     ).whenNotMatchedInsertAll().execute()
 
-    job_runs.unpersist()
     print(f"telemetry_job_runs: {jobs_count} records")
 else:
     print("SKIP: system.lakeflow.* not accessible")
@@ -357,12 +387,12 @@ if availability["query_history"] and warehouse_id_filter:
         F.col("compute.warehouse_id").alias("warehouse_id"),
         "execution_status", "statement_type",
         "total_duration_ms", "execution_duration_ms",
-        "waiting_at_capacity_ms",
+        F.col("waiting_at_capacity_duration_ms").alias("waiting_at_capacity_ms"),
         "read_rows", "produced_rows",
         "start_time", "end_time",
         "client_application",
         F.current_timestamp().alias("ingested_at"),
-    ).cache()
+    )
 
     queries_count = queries.count()
 
@@ -371,7 +401,6 @@ if availability["query_history"] and warehouse_id_filter:
         queries.alias("s"), "t.statement_id = s.statement_id"
     ).whenNotMatchedInsertAll().execute()
 
-    queries.unpersist()
     print(f"telemetry_query_history: {queries_count} records")
 elif not warehouse_id_filter:
     print("SKIP: warehouse_id not set in config")
@@ -418,8 +447,7 @@ if dbu_count > 0:
         except Exception as e:
             print(f"Could not join list_prices (pricing column schema may differ by account): {e}")
 
-    spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
-    dbu_daily.write.mode("overwrite").partitionBy("usage_date").saveAsTable(f"{catalog}.{schema}.telemetry_dbu_daily")
+    dbu_daily.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}.telemetry_dbu_daily")
     print(f"telemetry_dbu_daily: {dbu_daily.count()} rows")
 else:
     print("SKIP: telemetry_dbu_daily (no bronze data)")

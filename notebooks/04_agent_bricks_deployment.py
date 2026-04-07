@@ -116,75 +116,66 @@ print(f"\nTotal files: {len(files)}")
 
 # DBTITLE 1,Agent Bricks API Helpers
 import time
-import requests
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.knowledgeassistants import (
+    KnowledgeAssistant,
+    KnowledgeSource,
+    FilesSpec,
+)
 
 w = WorkspaceClient()
 
-# Max wait time for endpoint provisioning (seconds)
 MAX_WAIT = 600
 POLL_INTERVAL = 15
 
 
-def _get_auth_headers():
-    """Get authorization headers using the SDK's auth provider (supports PAT, OAuth, Azure CLI, etc.)."""
-    headers = {}
-    w.config.authenticate(headers)
-    return headers
-
-
-def _ab_api(method, path, body=None):
-    """Call Agent Bricks REST API via the workspace API client."""
-    api_url = f"{w.config.host}/api/2.0/agent-bricks{path}"
-    headers = _get_auth_headers()
-    if method == "GET":
-        resp = requests.get(api_url, headers=headers)
-    elif method == "POST":
-        resp = requests.post(api_url, headers=headers, json=body)
-    elif method == "PUT":
-        resp = requests.put(api_url, headers=headers, json=body)
-    elif method == "DELETE":
-        resp = requests.delete(api_url, headers=headers)
-    else:
-        raise ValueError(f"Unsupported method: {method}")
-    resp.raise_for_status()
-    return resp.json() if resp.text else {}
-
-
-def find_tile_by_name(name):
-    """Find an Agent Bricks tile by name. Returns tile dict or None."""
-    sanitized = name.replace(' ', '_')
+def find_ka_by_name(display_name: str):
+    """Find an existing Knowledge Assistant by display_name."""
     try:
-        tiles = _ab_api("GET", "/tiles")
-        for tile in tiles.get("tiles", []):
-            if tile.get("name") == sanitized or tile.get("name") == name:
-                return tile
+        for ka in w.knowledge_assistants.list_knowledge_assistants():
+            if ka.display_name == display_name:
+                return ka
     except Exception as e:
-        print(f"Could not list tiles: {e}")
+        print(f"Could not list knowledge assistants: {e}")
     return None
 
 
-def wait_for_tile(tile_id, label="tile"):
-    """Poll until a tile's endpoint is ONLINE, FAILED, or timeout."""
-    print(f"Waiting for {label} endpoint to provision (tile_id: {tile_id})...")
+def wait_for_ka(ka_resource_name: str, label: str = "KA"):
+    """Poll until a KA endpoint is ONLINE. ka_resource_name: knowledge-assistants/{id}"""
+    print(f"Waiting for {label} to provision ({ka_resource_name})...")
     elapsed = 0
     while elapsed < MAX_WAIT:
         try:
-            tile = _ab_api("GET", f"/tiles/{tile_id}")
-            status = tile.get("endpoint_status", "UNKNOWN")
-            print(f"  Status: {status} ({elapsed}s elapsed)")
-            if status == "ONLINE":
-                print(f"{label} endpoint is ONLINE!")
-                return tile
-            if status == "FAILED":
-                print(f"ERROR: {label} endpoint provisioning failed.")
-                return tile
+            ka = w.knowledge_assistants.get_knowledge_assistant(ka_resource_name)
+            state = ka.state.value if ka.state else "UNKNOWN"
+            print(f"  State: {state} ({elapsed}s elapsed)")
+            if state in ("ONLINE", "ACTIVE"):
+                print(f"{label} is ready! Endpoint: {ka.endpoint_name}")
+                return ka
+            if state in ("FAILED", "ERROR"):
+                print(f"ERROR: {label} provisioning failed: {ka.error_info}")
+                return ka
         except Exception as e:
             print(f"  Error checking status: {e}")
         time.sleep(POLL_INTERVAL)
         elapsed += POLL_INTERVAL
-    print(f"WARNING: {label} endpoint did not come online within {MAX_WAIT}s. Check the Databricks UI.")
+    print(f"WARNING: {label} did not come online within {MAX_WAIT}s.")
     return None
+
+
+def find_genie_space_by_name(space_name: str):
+    """Find an existing Genie Space by title."""
+    try:
+        resp = w.genie.list_spaces()
+        if hasattr(resp, 'spaces') and resp.spaces:
+            for s in resp.spaces:
+                if s.title == space_name:
+                    return s.space_id
+    except Exception as e:
+        print(f"Could not list Genie spaces: {e}")
+    return None
+
+print("SDK helpers loaded.")
 
 # COMMAND ----------
 
@@ -192,31 +183,66 @@ def wait_for_tile(tile_id, label="tile"):
 ka_name = config['ka_name']
 ka_volume_path = config['ka_volume_path']
 
-existing_ka = find_tile_by_name(ka_name)
-
-ka_payload = {
-    "name": ka_name,
-    "description": config['ka_description'],
-    "instructions": config['ka_instructions'],
-    "volume_path": ka_volume_path,
-    "add_examples_from_volume": True,
-}
+existing_ka = find_ka_by_name(ka_name)
 
 if existing_ka:
-    ka_tile_id = existing_ka["tile_id"]
-    _ab_api("PUT", f"/tiles/{ka_tile_id}", ka_payload)
-    print(f"Updated existing KA '{ka_name}': {ka_tile_id}")
+    ka_id = existing_ka.id
+    ka_resource_name = existing_ka.name  # format: knowledge-assistants/{id}
+    print(f"Found existing KA '{ka_name}': {ka_id} (endpoint: {existing_ka.endpoint_name})")
 else:
-    result = _ab_api("POST", "/ka", ka_payload)
-    ka_tile_id = result["tile_id"]
-    print(f"Created new KA '{ka_name}': {ka_tile_id}")
+    created = w.knowledge_assistants.create_knowledge_assistant(
+        knowledge_assistant=KnowledgeAssistant(
+            display_name=ka_name,
+            description=config['ka_description'],
+            instructions=config['ka_instructions'],
+        )
+    )
+    ka_id = created.id
+    ka_resource_name = created.name
+    print(f"Created new KA '{ka_name}': {ka_id}")
 
-config['ka_tile_id'] = ka_tile_id
+# Add knowledge source (UC Volume with FAQ docs) if not already present
+existing_sources = list(w.knowledge_assistants.list_knowledge_sources(ka_resource_name))
+volume_source = None
+for src in existing_sources:
+    if src.files and src.files.path == ka_volume_path:
+        volume_source = src
+        break
+
+if not volume_source:
+    ks = w.knowledge_assistants.create_knowledge_source(
+        parent=ka_resource_name,
+        knowledge_source=KnowledgeSource(
+            display_name="Billing FAQ Documents",
+            description="FAQ documents covering billing questions, payment methods, and plan details.",
+            source_type="files",
+            files=FilesSpec(path=ka_volume_path),
+        ),
+    )
+    print(f"Added knowledge source: {ks.id} ({ka_volume_path})")
+else:
+    print(f"Knowledge source already exists: {volume_source.id}")
+
+# Sync knowledge sources to trigger indexing
+w.knowledge_assistants.sync_knowledge_sources(ka_resource_name)
+print("Triggered knowledge source sync.")
+
+config['ka_id'] = ka_id
 
 # COMMAND ----------
 
 # DBTITLE 1,Wait for KA Endpoint to Provision
-wait_for_tile(ka_tile_id, label="KA")
+ka_result = wait_for_ka(ka_resource_name, label="Billing FAQ KA")
+if ka_result and ka_result.endpoint_name:
+    ka_endpoint_name = ka_result.endpoint_name
+    config['ka_endpoint_name'] = ka_endpoint_name
+    print(f"KA endpoint: {ka_endpoint_name}")
+else:
+    # KA may already be online from a previous run
+    ka = w.knowledge_assistants.get_knowledge_assistant(ka_resource_name)
+    ka_endpoint_name = ka.endpoint_name or '(not available)'
+    config['ka_endpoint_name'] = ka_endpoint_name
+    print(f"KA endpoint (from existing): {ka_endpoint_name}")
 
 # COMMAND ----------
 
@@ -230,67 +256,62 @@ wait_for_tile(ka_tile_id, label="KA")
 
 # DBTITLE 1,Verify Genie Space ID is Available
 genie_space_id = config.get('genie_space_id')
+
+# If not in config, look up by name
+if not genie_space_id:
+    genie_space_name = config.get('genie_space_name', '')
+    if genie_space_name:
+        genie_space_id = find_genie_space_by_name(genie_space_name)
+        if genie_space_id:
+            config['genie_space_id'] = genie_space_id
+            print(f"Found Genie Space '{genie_space_name}': {genie_space_id}")
+
 if not genie_space_id:
     raise ValueError(
-        "genie_space_id is not set in config. "
+        "genie_space_id is not set in config and could not be found by name. "
         "Run notebook 03a_create_genie_space first."
     )
-print(f"Genie Space ID: {genie_space_id}")
-print(f"KA Tile ID: {ka_tile_id}")
+
+ka_endpoint_name = config.get('ka_endpoint_name', '')
+if not ka_endpoint_name:
+    ka = w.knowledge_assistants.get_knowledge_assistant(ka_resource_name)
+    ka_endpoint_name = ka.endpoint_name or '(not yet provisioned)'
+
+print(f"Genie Space ID:    {genie_space_id}")
+print(f"KA Endpoint Name:  {ka_endpoint_name}")
 
 # COMMAND ----------
 
 # DBTITLE 1,Create or Update Supervisor Agent
+host = w.config.host
 mas_name = config['mas_name']
 
-agents = [
-    {
-        "name": "billing_faq_agent",
-        "ka_tile_id": ka_tile_id,
-        "description": config['ka_description'],
-    },
-    {
-        "name": "billing_analytics_agent",
-        "genie_space_id": genie_space_id,
-        "description": (
-            "Runs SQL analytics on billing data: charge trends, plan comparisons, "
-            "customer segmentation, top-N rankings, and month-over-month analysis. "
-            "Uses invoice_analytics (PII-safe monthly charges per customer) and "
-            "billing_plans (plan pricing and allowances)."
-        ),
-    },
-]
-
+print("=" * 60)
+print("Create the Supervisor Agent via the UI")
+print("=" * 60)
+print(f"\n1. Open: {host}/#/agents")
+print("2. Click 'Supervisor Agent' → 'Build'")
+print(f"3. Name: {mas_name}")
+print(f"4. Description: {config['mas_description']}")
+print(f"\n5. Add sub-agents:")
+print(f"   a) Agent endpoint → '{ka_endpoint_name}'  (Billing FAQ KA)")
+print(f"   b) Genie Space → ID: {genie_space_id}  (Billing Analytics)")
+print(f"\n6. Instructions:")
+print(f"   {config['mas_instructions'][:300]}...")
+print(f"\n7. Add example questions:")
 examples = [
-    {"question": "How is my bill calculated?", "guideline": "Should be routed to billing_faq_agent"},
-    {"question": "What is the average monthly charge across all plans?", "guideline": "Should be routed to billing_analytics_agent"},
-    {"question": "How do I set up autopay?", "guideline": "Should be routed to billing_faq_agent"},
-    {"question": "Which plan has the highest roaming charges?", "guideline": "Should be routed to billing_analytics_agent"},
-    {"question": "What are the top 10 customers by total charges?", "guideline": "Should be routed to billing_analytics_agent"},
-    {"question": "Can I change my bill due date?", "guideline": "Should be routed to billing_faq_agent"},
-    {"question": "Compare charges between 12-month and 24-month plans", "guideline": "Should be routed to billing_analytics_agent"},
+    ("How is my bill calculated?", "billing_faq_agent"),
+    ("Average monthly charge across all plans?", "billing_analytics_agent"),
+    ("How do I set up autopay?", "billing_faq_agent"),
+    ("Which plan has the highest roaming charges?", "billing_analytics_agent"),
+    ("Top 10 customers by total charges?", "billing_analytics_agent"),
 ]
+for q, agent in examples:
+    print(f"   Q: {q:50s} → {agent}")
 
-existing_mas = find_tile_by_name(mas_name)
-
-mas_payload = {
-    "name": mas_name,
-    "agents": agents,
-    "description": config['mas_description'],
-    "instructions": config['mas_instructions'],
-    "examples": examples,
-}
-
-if existing_mas:
-    mas_tile_id = existing_mas["tile_id"]
-    _ab_api("PUT", f"/tiles/{mas_tile_id}", mas_payload)
-    print(f"Updated existing MAS '{mas_name}': {mas_tile_id}")
-else:
-    result = _ab_api("POST", "/mas", mas_payload)
-    mas_tile_id = result["tile_id"]
-    print(f"Created new MAS '{mas_name}': {mas_tile_id}")
-
-config['mas_tile_id'] = mas_tile_id
+print(f"\n8. Click 'Create' to provision the supervisor endpoint.")
+print("=" * 60)
+print("\nNote: The Supervisor Agent API is UI-only; no programmatic SDK is available yet.")
 
 # COMMAND ----------
 

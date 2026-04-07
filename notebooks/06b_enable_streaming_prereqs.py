@@ -50,20 +50,26 @@ COMMENT 'Audit log of all proactive monitoring alerts dispatched by the system'
 print("billing_monitoring_state created")
 
 # ── Step 4: Create billing_monitoring_summary view ───────────────────────────
+# Drop existing object (may be a table from seed data or a view from a prior run)
+for drop_type in ["TABLE", "VIEW"]:
+    try:
+        spark.sql(f"DROP {drop_type} IF EXISTS {catalog}.{schema}.billing_monitoring_summary")
+    except Exception:
+        pass
 spark.sql(f"""
 CREATE OR REPLACE VIEW {catalog}.{schema}.billing_monitoring_summary AS
 SELECT
   b.event_month,
   b.anomaly_type,
-  COUNT(DISTINCT b.anomaly_id)                                                    AS total_anomalies,
+  COUNT(DISTINCT CONCAT(CAST(b.customer_id AS STRING), '-', b.event_month, '-', b.anomaly_type)) AS total_anomalies,
   COUNT(DISTINCT m.anomaly_id)                                                    AS alerted_count,
-  COUNT(DISTINCT b.anomaly_id)
+  COUNT(DISTINCT CONCAT(CAST(b.customer_id AS STRING), '-', b.event_month, '-', b.anomaly_type))
     - COUNT(DISTINCT m.anomaly_id)                                                AS pending_alert_count,
   MAX(b.pipeline_run_at)                                                          AS last_detection_ts,
   MAX(m.alert_sent_ts)                                                            AS last_alert_ts
 FROM {catalog}.{schema}.billing_anomalies b
 LEFT JOIN {catalog}.{schema}.billing_monitoring_state m
-  ON b.anomaly_id = m.anomaly_id
+  ON CONCAT(CAST(b.customer_id AS STRING), '-', b.event_month, '-', b.anomaly_type) = m.anomaly_id
   AND m.was_delivered = true
 GROUP BY b.event_month, b.anomaly_type
 """)
@@ -71,10 +77,9 @@ print("billing_monitoring_summary view created")
 
 # ── Step 5: Validate ─────────────────────────────────────────────────────────
 for table in ["billing_items", "billing_anomalies", "billing_monitoring_state"]:
-    cdf_row = (spark.sql(f"DESCRIBE EXTENDED {catalog}.{schema}.{table}")
-               .filter("col_name = 'delta.enableChangeDataFeed'")
+    cdf_row = (spark.sql(f"SHOW TBLPROPERTIES {catalog}.{schema}.{table} ('delta.enableChangeDataFeed')")
                .collect())
-    status = cdf_row[0]["data_type"] if cdf_row else "NOT SET"
+    status = cdf_row[0]["value"] if cdf_row else "NOT SET"
     print(f"  {table}: CDF = {status}")
 
 print("\nPrerequisite setup complete. Ready to create DLT pipeline (notebook 06a).")

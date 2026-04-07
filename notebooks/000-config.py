@@ -20,8 +20,8 @@ if 'config' not in locals():
 # Catalog and database
 # Change the Catalog and database name as per your requirements
 
-config['catalog'] = 'cme_demos_alex_barreto'
-config['database'] = 'telco_billing_db'
+config['catalog'] = 'alexxx'
+config['database'] = 'customer_billing_accelerator'
 
 # COMMAND ----------
 
@@ -41,7 +41,7 @@ config['UNIQUE_PLANS'] = 10 # Number of unique plans are 10 in the Github datase
 config['PLAN_MIN_VALUE'] = 1
 
 
-config['AVG_EVENTS_PER_CUSTOMER'] = 10
+config['AVG_EVENTS_PER_CUSTOMER'] = 20
 
 config['shuffle_partitions_requested'] = 8
 config['partitions_requested'] = 8
@@ -49,7 +49,7 @@ config['NUM_DAYS']=365 # number of days to generate data for
 config['MB_100'] = 50000000 # Max bytes transferred
 config['K_1'] = 100000 # Min bytes transferred
 config['start_dt']="2024-01-01 00:00:00" 
-config['end_dt']="2024-12-31 11:59:59"
+config['end_dt']="2026-12-31 11:59:59"
 
 
 
@@ -63,22 +63,12 @@ config['end_dt']="2024-12-31 11:59:59"
 
 # DBTITLE 1,Set Agent Configuration Parameters in Config Dictionary
 # Agent Configs
-config['agent_name'] = 'ai_billing_agent'
-config['VECTOR_SEARCH_ENDPOINT_NAME'] = 'vector-search-telco-billing'
+config['agent_name'] = 'ai_customer_billing_agent'
+config['VECTOR_SEARCH_ENDPOINT_NAME'] = 'vector-search-customer-billing'
 config['vector_search_index'] = 'faq_indx1'
 config['embedding_model_endpoint_name'] = 'databricks-gte-large-en'  # This is default enbedding model and needs to be updated for your environment
 config['llm_endpoint']="databricks-claude-3-7-sonnet" # This is default token based pricing endpoint and needs to be updated based on your requirement
-config['warehouse_id']="148ccb90800933a1" # This is the warehouse id and need to be updated for your environment
-
-# Agent guardrails
-config['max_agent_tokens'] = 4096        # Max tokens per LLM response
-config['max_history_turns'] = 20         # Max conversation turns retained (older trimmed)
-
-# Anomaly detection thresholds (consumed by notebook 05)
-config['anomaly_zscore_threshold'] = 2.0       # std deviations for total charge spike
-config['anomaly_roaming_multiplier'] = 3.0     # multiplier over mean for roaming spike
-config['anomaly_intl_multiplier'] = 3.0        # multiplier over mean for international spike
-config['anomaly_min_months'] = 2               # minimum months of history required
+config['warehouse_id']="862f1d757f0424f7" # dbdemos-shared-endpoint (updated from deleted 148ccb90800933a1)
 
 # Tools 
 config['tools_billing_faq'] = config['catalog']+'.'+config['database']+'.billing_faq'
@@ -124,7 +114,7 @@ config['erp_foreign_catalog'] = ''
 config['disputes_table'] = config['catalog']+'.'+config['database']+'.billing_disputes'
 config['write_audit_table'] = config['catalog']+'.'+config['database']+'.billing_write_audit'
 # Domain abstraction (Gap #7)
-config['active_domain'] = 'telco'
+config['active_domain'] = 'Customer'
 config['domain_display_name'] = 'Telecommunications'
 config['domain_industry'] = 'Telecommunications'
 config['domain_charge_labels'] = {}
@@ -148,9 +138,9 @@ config['tools_revenue_attribution'] = config['catalog']+'.'+config['database']+'
 config['tools_finance_ops_summary'] = config['catalog']+'.'+config['database']+'.get_finance_operations_summary'
 
 # Genie Space
-config['genie_space_name'] = 'Telco Billing Analytics'
+config['genie_space_name'] = 'Customer Billing Analytics'
 config['genie_space_description'] = (
-    'Natural language analytics over telco billing data. '
+    'Natural language analytics over customer billing data. '
     'Includes invoice_analytics (monthly charges per customer), billing_plans (pricing and allowances), '
     'billing_anomalies (detected charge spikes and roaming spikes), '
     'billing_monitoring_state (alert dispatch audit log with severity and delivery status), '
@@ -160,7 +150,7 @@ config['genie_space_description'] = (
     'telemetry_job_reliability tracks 30-day rolling success rates for platform jobs. '
     'telemetry_warehouse_utilization tracks hourly query performance for the SQL warehouse. '
     'telemetry_operational_kpis is the daily summary of platform health and cost. '
-    'silver_customer_account_dims joins ERP AR data with telco customers. '
+    'silver_customer_account_dims joins ERP AR data with retail customers. '
     'gold_revenue_attribution reconciles billing revenue with ERP recognized revenue. '
     'gold_finance_operations_summary is the monthly finance ops KPI roll-up.'
 )
@@ -225,7 +215,7 @@ config['genie_space_sample_questions'] = [
 config['genie_space_id'] = None  # Set by 03a_create_genie_space after creation
 
 # Agent Bricks (Supervisor Agent)
-config['ka_name'] = 'Telco Billing FAQ'
+config['ka_name'] = 'Customer Billing FAQ'
 config['ka_description'] = 'Answers frequently asked billing questions about bill calculation, payments, autopay, disputes, refunds, late fees, data usage, roaming charges, and due date changes.'
 config['ka_instructions'] = (
     'Answer billing questions using the FAQ documents. '
@@ -235,9 +225,9 @@ config['ka_instructions'] = (
 config['ka_volume_path'] = f"/Volumes/{config['catalog']}/{config['database']}/billing_faq_docs"
 config['ka_tile_id'] = None  # Set by 04_agent_bricks_deployment after creation
 
-config['mas_name'] = 'Telco Billing Support'
+config['mas_name'] = 'Customer Billing Support'
 config['mas_description'] = (
-    'Telco billing support supervisor that routes queries to specialized agents: '
+    'Customer billing support supervisor that routes queries to specialized agents: '
     'a FAQ Knowledge Assistant for general billing questions and a Genie Space '
     'for ad-hoc billing analytics across the customer base.'
 )

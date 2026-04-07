@@ -58,29 +58,6 @@ Sachin Patil <sachin.patil@databricks.com>
 
 ---
 
-## Deployment Paths
-
-This accelerator provides two deployment paths. **Choose one before starting** — they are not additive.
-
-| Capability | LangGraph Agent (Notebook 03) | Agent Bricks Supervisor (Notebook 04) |
-|---|---|---|
-| FAQ retrieval | Yes | Yes |
-| Fleet-wide analytics (Genie Space) | Yes | Yes |
-| Individual customer billing lookup | Yes | No |
-| Anomaly detection + acknowledgement | Yes | No |
-| Billing dispute creation | Yes | No |
-| ERP credit/AR profile | Yes | No |
-| Real-time streaming estimates | Yes | No |
-| Operational KPIs / telemetry | Yes | No |
-| Write-back with audit trail | Yes | No |
-| Per-persona tool filtering | Yes | No |
-
-**LangGraph (notebook 03):** Full-featured agent with 19 tools, write-back, anomaly management, ERP integration, streaming estimates, and persona-based access control. Use for production deployments requiring dispute management and customer-specific operations.
-
-**Agent Bricks (notebook 04):** Managed Supervisor Agent with FAQ Knowledge Assistant + Genie Space for analytics. Read-only. Use for demos and read-only analytics deployments. Individual customer lookups are not available through this path.
-
----
-
 ## How to Use
 
 Follow the notebooks in **numerical order** for a smooth end-to-end experience:

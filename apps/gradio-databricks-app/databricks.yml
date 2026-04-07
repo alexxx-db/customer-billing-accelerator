@@ -1,0 +1,51 @@
+bundle:
+  name: gradio_databricks_app_bundle
+
+variables:
+  catalog:
+    default: "main"
+  schema:
+    default: "default"
+  # Use lookup to resolve warehouse by name (avoids hardcoding IDs):
+  # warehouse_id:
+  #   lookup:
+  #     warehouse: "Shared SQL Warehouse"
+
+resources:
+  apps:
+    gradio_starter:
+      name: gradio-starter-${bundle.target}
+      description: "Gradio Databricks Starter App (${bundle.target})"
+      source_code_path: .
+      # Permissions — adjust group names to match your workspace.
+      # permissions:
+      #   - level: CAN_USE
+      #     group_name: "users"
+      #   - level: CAN_MANAGE
+      #     group_name: "admins"
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      # Replace with your dev workspace host or profile:
+      host: https://your-dev-workspace.cloud.databricks.com
+      # profile: dev-profile
+    variables:
+      catalog: "dev_catalog"
+      schema: "dev_schema"
+
+  prod:
+    mode: production
+    workspace:
+      # Replace with your prod workspace host or profile:
+      host: https://your-prod-workspace.cloud.databricks.com
+      # profile: prod-profile
+      # root_path: /Workspace/Applications/gradio-starter
+    variables:
+      catalog: "prod_catalog"
+      schema: "prod_schema"
+    # Run as a service principal in production:
+    # run_as:
+    #   service_principal_name: "gradio-app-sp"

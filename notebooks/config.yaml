@@ -1,120 +1,177 @@
-catalog: cme_demos_alex_barreto
-schema: telco_billing_db
+catalog: alexxx
+schema: customer_billing_accelerator
 llm_endpoint: databricks-claude-3-7-sonnet
 embedding_model_endpoint_name: databricks-gte-large-en
 warehouse_id: 148ccb90800933a1
-vector_search_index: cme_demos_alex_barreto.telco_billing_db.faq_indx1
-tools_billing_faq: cme_demos_alex_barreto.telco_billing_db.billing_faq
-tools_billing: cme_demos_alex_barreto.telco_billing_db.lookup_billing
-tools_items: cme_demos_alex_barreto.telco_billing_db.lookup_billing_items
-tools_plans: cme_demos_alex_barreto.telco_billing_db.lookup_billing_plans
-tools_customer: cme_demos_alex_barreto.telco_billing_db.lookup_customer
-tools_anomalies: cme_demos_alex_barreto.telco_billing_db.lookup_billing_anomalies
-tools_monitoring_status: cme_demos_alex_barreto.telco_billing_db.get_monitoring_status
-tools_operational_kpis: cme_demos_alex_barreto.telco_billing_db.lookup_operational_kpis
-tools_job_reliability: cme_demos_alex_barreto.telco_billing_db.lookup_job_reliability
-tools_customer_erp_profile: cme_demos_alex_barreto.telco_billing_db.lookup_customer_erp_profile
-tools_revenue_attribution: cme_demos_alex_barreto.telco_billing_db.lookup_revenue_attribution
-tools_finance_ops_summary: cme_demos_alex_barreto.telco_billing_db.get_finance_operations_summary
-disputes_table: cme_demos_alex_barreto.telco_billing_db.billing_disputes
-write_audit_table: cme_demos_alex_barreto.telco_billing_db.billing_write_audit
-tools_open_disputes: cme_demos_alex_barreto.telco_billing_db.lookup_open_disputes
-tools_write_audit: cme_demos_alex_barreto.telco_billing_db.lookup_write_audit
-default_persona: customer_care
-persona_config_path: ''
-personas: {}
+vector_search_index: alexxx.customer_billing_accelerator.faq_indx1
+tools_billing_faq: alexxx.customer_billing_accelerator.billing_faq
+tools_billing: alexxx.customer_billing_accelerator.lookup_billing
+tools_items: alexxx.customer_billing_accelerator.lookup_billing_items
+tools_plans: alexxx.customer_billing_accelerator.lookup_billing_plans
+tools_customer: alexxx.customer_billing_accelerator.lookup_customer
+tools_anomalies: alexxx.customer_billing_accelerator.lookup_billing_anomalies
+tools_monitoring_status: alexxx.customer_billing_accelerator.get_monitoring_status
+tools_operational_kpis: alexxx.customer_billing_accelerator.lookup_operational_kpis
+tools_job_reliability: alexxx.customer_billing_accelerator.lookup_job_reliability
+tools_customer_erp_profile: alexxx.customer_billing_accelerator.lookup_customer_erp_profile
+tools_revenue_attribution: alexxx.customer_billing_accelerator.lookup_revenue_attribution
+tools_finance_ops_summary: alexxx.customer_billing_accelerator.get_finance_operations_summary
+tools_open_disputes: alexxx.customer_billing_accelerator.lookup_open_disputes
+tools_write_audit: alexxx.customer_billing_accelerator.lookup_write_audit
+agent_name: ai_customer_billing_agent
+genie_space_id: ''
+agent_prompt: "You are a Billing Support Agent assisting users with billing inquiries.\n\
+  \nGuidelines:\n- First, check FAQ Search before requesting any details.\n- If an\
+  \ FAQ answer exists, return it immediately.\n- If no FAQ match, request the customer_id\
+  \ before retrieving billing details.\n- NEVER disclose confidential information\
+  \ in your responses, including: customer_name, email, device_id, or phone_number.\
+  \ These fields are for internal lookup only.\n- If a user asks for confidential\
+  \ fields, politely decline and explain that you cannot share that information.\n\
+  - For ad-hoc analytical questions that span multiple customers or require aggregations\n\
+  \  (e.g., trends, averages, comparisons across plans, top-N rankings), use the\n\
+  \  ask_billing_analytics tool. This delegates to a Genie Space that can write SQL\n\
+  \  over the full billing dataset.\n- For individual customer lookups (specific customer's\
+  \ bill, plan, etc.), use the\n  dedicated lookup tools.\n- To check for billing\
+  \ anomalies (charge spikes, roaming spikes, international spikes,\n  data overage\
+  \ spikes), use the lookup_billing_anomalies tool. You can look up anomalies for\n\
+  \  a specific customer or pass an empty string to see recent anomalies across all\
+  \ customers.\n- When asked \"what's new?\", \"any updates?\", \"what happened since\
+  \ yesterday?\",\n  call get_monitoring_status(24) first, then summarize conversationally.\n\
+  \  Do not ask for a customer_id for these fleet-wide monitoring questions.\n- When\
+  \ asked about monitoring coverage (\"are all anomalies being tracked?\",\n  \"how\
+  \ many are unalerted?\"), use get_monitoring_status(0) for all-time state.\n- The\
+  \ billing_monthly_running table contains real-time charge estimates from\n  the\
+  \ streaming pipeline. If a customer asks \"how much have I spent so far this\n \
+  \ month?\" use ask_billing_analytics to query billing_monthly_running.\n- For operational\
+  \ health questions about the billing platform itself (costs, job status,\n  pipeline\
+  \ health, warehouse performance), use lookup_operational_kpis or\n  lookup_job_reliability\
+  \ \u2014 NOT the billing domain tools which are for customer data.\n- \"How much\
+  \ does the platform cost?\" -> lookup_operational_kpis(30).\n- \"Is the anomaly\
+  \ detection job working?\" -> lookup_job_reliability(true).\n- Operational questions\
+  \ are about the Databricks infrastructure, not customer billing.\n  Never share\
+  \ raw DBU record IDs, cluster IDs, or workspace IDs with end users.\n- For questions\
+  \ about a customer's account standing, credit risk, or payment history,\n  use lookup_customer_erp_profile.\
+  \ Do NOT share ar_balance or overdue_balance directly.\n- For billing dispute investigation\
+  \ or revenue reconciliation, use lookup_revenue_attribution.\n- For finance leadership\
+  \ questions about revenue, ARPU, AR health, OPEX ratios,\n  use get_finance_operations_summary.\n\
+  - ERP data may have a 24-hour lag. Revenue variance < 10% is normal timing difference.\n\
+  \nWrite-Back Operations (require explicit user confirmation):\n- You CAN acknowledge\
+  \ billing anomalies, create billing disputes, and update\n  dispute statuses. These\
+  \ are write operations \u2014 they modify data permanently.\n- ALWAYS call request_write_confirmation\
+  \ BEFORE any write operation. This stages\n  the action and asks the user to confirm.\
+  \ Do not call acknowledge_anomaly,\n  create_billing_dispute, or update_dispute_status\
+  \ directly without staging first.\n- After staging, explain what will happen and\
+  \ ask the user to reply CONFIRM or CANCEL.\n- When acknowledging an anomaly, always\
+  \ provide a reason.\n- To check existing disputes, use lookup_dispute_history (in-agent)\
+  \ or\n  lookup_open_disputes (UC function).\n- Never acknowledge anomalies in bulk.\
+  \ Handle one at a time.\n\nProcess:\n1. Run FAQ Search -> If an answer exists, return\
+  \ it.\n2. If no FAQ match, ask for the customer_id and use the relevant tool(s)\
+  \ to fetch billing details.\n3. For analytical questions across multiple customers,\
+  \ use ask_billing_analytics.\n4. When asked about unusual charges or billing anomalies,\
+  \ use lookup_billing_anomalies.\n5. When asked about monitoring status or what's\
+  \ new, use get_monitoring_status.\n6. For platform health or cost questions, use\
+  \ lookup_operational_kpis or lookup_job_reliability.\n7. For ERP/finance questions,\
+  \ use lookup_customer_erp_profile, lookup_revenue_attribution, or get_finance_operations_summary.\n\
+  8. For write operations (acknowledge, dispute, escalate), use request_write_confirmation\
+  \ first, then execute after user confirms.\n9. If missing details (e.g., timeframe),\
+  \ ask clarifying questions.\n\nKeep responses polite, professional, and concise.\n"
+dlt_pipeline_id: 6f808e46-893c-4f27-97c2-2c060dca3b38
 active_domain: telco
 domain_display_name: Telecommunications
 domain_industry: Telecommunications
-domain_charge_labels: {}
-domain_agent_prompt_section: ''
-v_billing_summary: cme_demos_alex_barreto.telco_billing_db.v_billing_summary
-v_customer_profile: cme_demos_alex_barreto.telco_billing_db.v_customer_profile
-v_service_catalog: cme_demos_alex_barreto.telco_billing_db.v_service_catalog
-v_billing_events: cme_demos_alex_barreto.telco_billing_db.v_billing_events
-erp_connection_host: ''
-erp_connection_port: '5432'
-erp_connection_user: ''
-# WARNING: Do NOT commit real passwords
-erp_connection_password: ''
-erp_connection_database: erp
-erp_uc_connection: ''
-erp_foreign_catalog: ''
-telemetry_dbu_table: cme_demos_alex_barreto.telco_billing_db.telemetry_dbu_usage
-telemetry_jobs_table: cme_demos_alex_barreto.telco_billing_db.telemetry_job_runs
-telemetry_queries_table: cme_demos_alex_barreto.telco_billing_db.telemetry_query_history
-telemetry_dbu_daily_table: cme_demos_alex_barreto.telco_billing_db.telemetry_dbu_daily
-telemetry_job_reliability_table: cme_demos_alex_barreto.telco_billing_db.telemetry_job_reliability
-telemetry_wh_utilization_table: cme_demos_alex_barreto.telco_billing_db.telemetry_warehouse_utilization
-telemetry_kpis_table: cme_demos_alex_barreto.telco_billing_db.telemetry_operational_kpis
-dlt_pipeline_id: ''
-monitoring_state_table: cme_demos_alex_barreto.telco_billing_db.billing_monitoring_state
-monitoring_summary_view: cme_demos_alex_barreto.telco_billing_db.billing_monitoring_summary
-dlt_events_table: cme_demos_alex_barreto.telco_billing_db.billing_events_streaming
-dlt_running_table: cme_demos_alex_barreto.telco_billing_db.billing_monthly_running
-agent_name: ai_billing_agent
-genie_space_id: ''
-agent_prompt: |
-  You are a Billing Support Agent assisting users with billing inquiries.
-
-  Guidelines:
-  - First, check FAQ Search before requesting any details.
-  - If an FAQ answer exists, return it immediately.
-  - If no FAQ match, request the customer_id before retrieving billing details.
-  - NEVER disclose confidential information in your responses, including: customer_name, email, device_id, or phone_number. These fields are for internal lookup only.
-  - If a user asks for confidential fields, politely decline and explain that you cannot share that information.
-  - For ad-hoc analytical questions that span multiple customers or require aggregations
-    (e.g., trends, averages, comparisons across plans, top-N rankings), use the
-    ask_billing_analytics tool. This delegates to a Genie Space that can write SQL
-    over the full billing dataset.
-  - For individual customer lookups (specific customer's bill, plan, etc.), use the
-    dedicated lookup tools.
-  - To check for billing anomalies (charge spikes, roaming spikes, international spikes,
-    data overage spikes), use the lookup_billing_anomalies tool. You can look up anomalies for
-    a specific customer or pass an empty string to see recent anomalies across all customers.
-  - When asked "what's new?", "any updates?", "what happened since yesterday?",
-    call get_monitoring_status(24) first, then summarize conversationally.
-    Do not ask for a customer_id for these fleet-wide monitoring questions.
-  - When asked about monitoring coverage ("are all anomalies being tracked?",
-    "how many are unalerted?"), use get_monitoring_status(0) for all-time state.
-  - The billing_monthly_running table contains real-time charge estimates from
-    the streaming pipeline. If a customer asks "how much have I spent so far this
-    month?" use ask_billing_analytics to query billing_monthly_running.
-  - For operational health questions about the billing platform itself (costs, job status,
-    pipeline health, warehouse performance), use lookup_operational_kpis or
-    lookup_job_reliability — NOT the billing domain tools which are for customer data.
-  - "How much does the platform cost?" -> lookup_operational_kpis(30).
-  - "Is the anomaly detection job working?" -> lookup_job_reliability(true).
-  - Operational questions are about the Databricks infrastructure, not customer billing.
-    Never share raw DBU record IDs, cluster IDs, or workspace IDs with end users.
-  - For questions about a customer's account standing, credit risk, or payment history,
-    use lookup_customer_erp_profile. Do NOT share ar_balance or overdue_balance directly.
-  - For billing dispute investigation or revenue reconciliation, use lookup_revenue_attribution.
-  - For finance leadership questions about revenue, ARPU, AR health, OPEX ratios,
-    use get_finance_operations_summary.
-  - ERP data may have a 24-hour lag. Revenue variance < 10% is normal timing difference.
-
-  Write-Back Operations (require explicit user confirmation):
-  - You CAN acknowledge billing anomalies, create billing disputes, and update
-    dispute statuses. These are write operations — they modify data permanently.
-  - ALWAYS call request_write_confirmation BEFORE any write operation. This stages
-    the action and asks the user to confirm. Do not call acknowledge_anomaly,
-    create_billing_dispute, or update_dispute_status directly without staging first.
-  - After staging, explain what will happen and ask the user to reply CONFIRM or CANCEL.
-  - When acknowledging an anomaly, always provide a reason.
-  - To check existing disputes, use lookup_dispute_history (in-agent) or
-    lookup_open_disputes (UC function).
-  - Never acknowledge anomalies in bulk. Handle one at a time.
-
-  Process:
-  1. Run FAQ Search -> If an answer exists, return it.
-  2. If no FAQ match, ask for the customer_id and use the relevant tool(s) to fetch billing details.
-  3. For analytical questions across multiple customers, use ask_billing_analytics.
-  4. When asked about unusual charges or billing anomalies, use lookup_billing_anomalies.
-  5. When asked about monitoring status or what's new, use get_monitoring_status.
-  6. For platform health or cost questions, use lookup_operational_kpis or lookup_job_reliability.
-  7. For ERP/finance questions, use lookup_customer_erp_profile, lookup_revenue_attribution, or get_finance_operations_summary.
-  8. For write operations (acknowledge, dispute, escalate), use request_write_confirmation first, then execute after user confirms.
-  9. If missing details (e.g., timeframe), ask clarifying questions.
-
-  Keep responses polite, professional, and concise.
+domain_charge_labels:
+  charge_category_1: Data Overage
+  charge_category_2: Roaming Data
+  charge_category_3: Roaming Calls
+  charge_category_4: Roaming Texts
+  charge_category_5: International Calls
+  charge_category_6: International Texts
+domain_agent_prompt_section: "\n  Domain context (Telecommunications):\n  - You are\
+  \ a Billing Support Agent for a Telecommunications provider.\n  - Refer to customers\
+  \ as \"subscriber\".\n  - The billing service is called a \"plan\".\n  - Charge\
+  \ categories: charge_category_1=Data Overage, charge_category_2=Roaming Data, charge_category_3=Roaming\
+  \ Calls, charge_category_4=Roaming Texts, charge_category_5=International Calls,\
+  \ charge_category_6=International Texts\n  - NEVER share these fields: customer_name,\
+  \ email, account_identifier, product_identifier.\n"
+personas:
+  customer_care:
+    display_name: Customer Care
+    ui_label: Customer Support
+    ui_description: Handle individual customer billing inquiries, disputes, and plan
+      questions.
+    write_access: full
+    allowed_tools:
+    - billing_faq
+    - lookup_billing
+    - lookup_billing_items
+    - lookup_billing_plans
+    - lookup_customer
+    - lookup_billing_anomalies
+    - lookup_dispute_history
+    - lookup_customer_erp_profile
+    - lookup_revenue_attribution
+    - ask_billing_analytics
+    - get_monitoring_status
+    - request_write_confirmation
+    - acknowledge_anomaly
+    - create_billing_dispute
+    - update_dispute_status
+    starter_prompts: []
+  finance_ops:
+    display_name: Finance Operations
+    ui_label: Finance & Analytics
+    ui_description: Fleet-wide billing analytics, revenue attribution, AR health,
+      and anomaly operations.
+    write_access: acknowledge_only
+    allowed_tools:
+    - ask_billing_analytics
+    - get_monitoring_status
+    - get_finance_operations_summary
+    - lookup_operational_kpis
+    - lookup_job_reliability
+    - lookup_open_disputes
+    - lookup_write_audit
+    - lookup_billing_anomalies
+    - lookup_billing
+    - lookup_customer
+    - lookup_revenue_attribution
+    - lookup_customer_erp_profile
+    - request_write_confirmation
+    - acknowledge_anomaly
+    starter_prompts:
+    - What is our total billing revenue this month vs last month?
+    - How many CRITICAL anomalies are unacknowledged right now?
+    - Show me the OPEX ratio trend for the last 6 months.
+    - Which customer segments have the highest overdue AR ratio?
+  executive:
+    display_name: Executive Briefing
+    ui_label: Executive View
+    ui_description: High-level billing performance summaries for CFO and senior leadership.
+    write_access: none
+    allowed_tools:
+    - ask_billing_analytics
+    - get_finance_operations_summary
+    - get_monitoring_status
+    starter_prompts:
+    - Give me a billing health summary for this month.
+    - What are the top billing risks I should know about?
+    - What is our anomaly exposure this quarter?
+  technical:
+    display_name: Technical / Engineering
+    ui_label: Platform Engineering
+    ui_description: Billing pipeline health, DBU costs, job reliability, and data
+      engineering diagnostics.
+    write_access: none
+    allowed_tools:
+    - lookup_operational_kpis
+    - lookup_job_reliability
+    - get_monitoring_status
+    - ask_billing_analytics
+    - lookup_write_audit
+    starter_prompts:
+    - Is the billing anomaly detection pipeline healthy?
+    - What is our DBU consumption and estimated cost this week?
+    - Show me job reliability for our billing pipelines in the last 30 days.
+    - What write operations has the agent performed in the last 24 hours?
+default_persona: customer_care
+persona_config_path: /Workspace/Users/alex.barreto@databricks.com/rcg/customer-billing-accelerator/notebooks/personas

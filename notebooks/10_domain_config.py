@@ -13,8 +13,15 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install pyyaml
+
+# COMMAND ----------
+
 # DBTITLE 1,Load Domain Config
-import yaml
+try:    import yaml
+except ModuleNotFoundError:
+    raise ImportError("PyYAML module is not installed. Please install it via the Libraries tab or using %pip install PyYAML")
+
 import os
 
 dbutils.widgets.text("domain", "telco", "Domain name (telco | saas | utility)")

@@ -19,10 +19,9 @@
 catalog = config['catalog']
 schema  = config['database']
 
-cdf_check = (spark.sql(f"DESCRIBE EXTENDED {catalog}.{schema}.billing_items")
-             .filter("col_name = 'delta.enableChangeDataFeed'")
+cdf_check = (spark.sql(f"SHOW TBLPROPERTIES {catalog}.{schema}.billing_items ('delta.enableChangeDataFeed')")
              .collect())
-if not cdf_check or cdf_check[0]["data_type"].lower() != "true":
+if not cdf_check or cdf_check[0]["value"].lower() != "true":
     raise RuntimeError(
         "CDF is not enabled on billing_items. "
         "Run notebook 06b_enable_streaming_prereqs first."
@@ -32,8 +31,8 @@ print("Preflight OK: CDF enabled on billing_items")
 # COMMAND ----------
 
 # DBTITLE 1,Create or Update DLT Pipeline
-import yaml
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.pipelines import PipelineCluster, PipelineLibrary, NotebookLibrary
 
 w = WorkspaceClient()
 
@@ -62,13 +61,10 @@ pipeline_spec = {
     "name": PIPELINE_NAME,
     "continuous": True,
     "libraries": [
-        {"notebook": {"path": dlt_notebook_path}}
+        PipelineLibrary(notebook=NotebookLibrary(path=dlt_notebook_path))
     ],
     "clusters": [
-        {
-            "label": "default",
-            "num_workers": 1,
-        }
+        PipelineCluster(label="default", num_workers=1)
     ],
     "configuration": {
         "pipeline.catalog": config["catalog"],
@@ -93,12 +89,17 @@ else:
 # COMMAND ----------
 
 # DBTITLE 1,Start Pipeline
+from databricks.sdk.errors import ResourceConflict
+
 state = w.pipelines.get(pipeline_id=pipeline_id)
 print(f"Current pipeline state: {state.state}")
 
 if str(state.state) not in ("RUNNING", "STARTING", "RESETTING"):
-    w.pipelines.start_update(pipeline_id=pipeline_id, full_refresh=False)
-    print("Pipeline start triggered")
+    try:
+        w.pipelines.start_update(pipeline_id=pipeline_id, full_refresh=False)
+        print("Pipeline start triggered")
+    except ResourceConflict:
+        print("Pipeline already has an active update — no action needed")
 else:
     print("Pipeline already running — no action needed")
 

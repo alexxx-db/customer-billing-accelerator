@@ -1,0 +1,26 @@
+command:
+  - "python"
+  - "app.py"
+
+env:
+  # --- App Resources (populated via Databricks Apps UI "Add resource" -> valueFrom) ---
+  # Uncomment and configure as you add resources to your app:
+
+  # - name: DATABRICKS_WAREHOUSE_ID
+  #   valueFrom: sql-warehouse
+
+  # - name: SERVING_ENDPOINT_NAME
+  #   valueFrom: serving-endpoint
+
+  # --- Static environment variables ---
+  - name: APP_NAME
+    value: "Gradio Databricks Starter"
+
+  # - name: DATABRICKS_CATALOG
+  #   value: "my_catalog"
+
+  # - name: DATABRICKS_SCHEMA
+  #   value: "my_schema"
+
+  # - name: LOG_LEVEL
+  #   value: "INFO"

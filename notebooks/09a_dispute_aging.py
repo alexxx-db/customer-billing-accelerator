@@ -36,11 +36,11 @@ w = WorkspaceClient()
 # DBTITLE 1,Find Overdue Disputes
 overdue_resp = w.statement_execution.execute_statement(
     statement=f"""
-        SELECT dispute_id, customer_id, dispute_type, status, updated_at
+        SELECT dispute_id, customer_id, dispute_type, status, created_at
         FROM {catalog}.{schema}.billing_disputes
         WHERE status IN ('OPEN', 'UNDER_REVIEW')
-          AND updated_at < CURRENT_TIMESTAMP - INTERVAL 5 DAYS
-        ORDER BY updated_at ASC
+          AND created_at < CURRENT_TIMESTAMP - INTERVAL 5 DAYS
+        ORDER BY created_at ASC
     """,
     warehouse_id=warehouse_id,
     wait_timeout="30s",
@@ -72,14 +72,13 @@ for row in rows:
     w.statement_execution.execute_statement(
         statement=f"""
             INSERT INTO {catalog}.{schema}.billing_write_audit
-            (audit_id, action_type, target_table, target_record_id, customer_id,
-             agent_session_id, executed_by, payload_json, sql_statement,
-             result_status, result_message, error_detail, executed_at)
+            (audit_id, action_type, target_record_id, customer_id,
+             result_status, result_message, executed_at)
             VALUES ('{audit_id}', 'AUTO_ESCALATE',
-            '{catalog}.{schema}.billing_disputes', '{dispute_id}',
-            {customer_id if customer_id else 'NULL'}, NULL,
-            'dispute_aging_job', NULL, NULL, 'PENDING',
-            'Auto-escalation for exceeding 5-day SLA.', NULL,
+            '{dispute_id}',
+            {customer_id if customer_id else 'NULL'},
+            'PENDING',
+            'Auto-escalation for exceeding 5-day SLA.',
             TIMESTAMP '{now_ts}')
         """,
         warehouse_id=warehouse_id, wait_timeout="10s")
@@ -90,8 +89,8 @@ for row in rows:
             statement=f"""
                 UPDATE {catalog}.{schema}.billing_disputes
                 SET status = 'ESCALATED',
-                    resolution_notes = 'Auto-escalated: exceeded 5-day SLA without resolution.',
-                    updated_at = TIMESTAMP '{now_ts}'
+                    description = 'Auto-escalated: exceeded 5-day SLA without resolution.',
+                    created_at = TIMESTAMP '{now_ts}'
                 WHERE dispute_id = '{dispute_id}'
                   AND status IN ('OPEN', 'UNDER_REVIEW')
             """,
@@ -105,14 +104,13 @@ for row in rows:
     w.statement_execution.execute_statement(
         statement=f"""
             INSERT INTO {catalog}.{schema}.billing_write_audit
-            (audit_id, action_type, target_table, target_record_id, customer_id,
-             agent_session_id, executed_by, payload_json, sql_statement,
-             result_status, result_message, error_detail, executed_at)
+            (audit_id, action_type, target_record_id, customer_id,
+             result_status, result_message, executed_at)
             VALUES ('{str(uuid.uuid4())}', 'AUTO_ESCALATE',
-            '{catalog}.{schema}.billing_disputes', '{dispute_id}',
-            {customer_id if customer_id else 'NULL'}, NULL,
-            'dispute_aging_job', NULL, NULL, '{status}',
-            'Escalation {"completed" if status == "SUCCESS" else "failed"}.', NULL,
+            '{dispute_id}',
+            {customer_id if customer_id else 'NULL'},
+            '{status}',
+            'Escalation {"completed" if status == "SUCCESS" else "failed"}.',
             TIMESTAMP '{datetime.now(timezone.utc).isoformat()}')
         """,
         warehouse_id=warehouse_id, wait_timeout="10s")

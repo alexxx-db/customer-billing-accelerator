@@ -1,9 +1,6 @@
-import uuid as _uuid
-
 import dash
 from dash import html, Input, Output, State, dcc
 import dash_bootstrap_components as dbc
-from flask import request as flask_request
 from model_serving_utils import query_endpoint
 
 class DatabricksChatbot:
@@ -153,16 +150,24 @@ class DatabricksChatbot:
             return dash.no_update, dash.no_update
 
     def _call_model_endpoint(self, messages, max_tokens=1024, persona="customer_care"):
+        # Extract user identity token from Databricks App headers
+        user_token = None
+        workspace_host = None
+        session_id = ""
         try:
+            from flask import request as flask_request
             user_token = flask_request.headers.get("x-forwarded-access-token")
             workspace_host = flask_request.headers.get("host", "")
-            conversation_id = str(_uuid.uuid4())
+        except Exception:
+            pass  # Not in Flask context (e.g., testing)
+
+        try:
             return query_endpoint(
                 self.endpoint_name, messages, max_tokens,
                 persona=persona,
                 user_token=user_token,
                 workspace_host=workspace_host,
-                session_id=conversation_id,
+                session_id=session_id,
             )["content"]
         except Exception as e:
             print(f'Error calling model endpoint: {str(e)}')

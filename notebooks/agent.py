@@ -7,22 +7,23 @@ from datetime import datetime, timezone
 
 import mlflow
 
+logger = logging.getLogger(__name__)
+
+# --- EchoStar Identity Propagation ---
 try:
     from identity_utils import (
         RequestContext, validate_request_context, check_tool_authorization,
         require_user_context, resolve_asset_policy, get_identity_secret,
         validate_persona_for_user, IdentityError, AuthorizationError,
-        AssetPolicy,
     )
+    _IDENTITY_AVAILABLE = True
 except ImportError:
-    from notebooks.identity_utils import (
-        RequestContext, validate_request_context, check_tool_authorization,
-        require_user_context, resolve_asset_policy, get_identity_secret,
-        validate_persona_for_user, IdentityError, AuthorizationError,
-        AssetPolicy,
-    )
-
-logger = logging.getLogger(__name__)
+    _IDENTITY_AVAILABLE = False
+    logger.warning("identity_utils not found — identity propagation disabled")
+    # Provide stub types so except clauses don't crash
+    class IdentityError(Exception): pass
+    class AuthorizationError(Exception): pass
+    RequestContext = None  # type: ignore
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementState
 from databricks_langchain import (
@@ -246,13 +247,14 @@ def confirm_write_operation(token: str) -> str:
             return "BLOCKED: Invalid or expired token. Stage the operation again with request_write_confirmation."
         op = _pending_writes.pop(token)
 
-    # HARD GUARD 2: require valid user context
+    # HARD GUARD 2: user identity context required for writes
     ctx = _get_request_context()
     if ctx is None:
-        # Put the token back — don't consume it without executing
+        # Return token to store — don't consume without executing
         with _pending_writes_lock:
             _pending_writes[token] = op
-        return "BLOCKED: No authenticated user context. Cannot execute write operations without user identity."
+        logger.warning("Write blocked: no user identity context")
+        return "BLOCKED: Authenticated user context required for write operations."
 
     return _execute_write(
         op,
@@ -261,6 +263,7 @@ def confirm_write_operation(token: str) -> str:
         session_id=ctx.session_id,
         request_id=ctx.request_id,
         persona=ctx.persona,
+        user_groups=json.dumps(ctx.user_groups),
     )
 
 
@@ -271,6 +274,7 @@ def _execute_write(
     session_id: str = "",
     request_id: str = "",
     persona: str = "",
+    user_groups: str = "[]",
 ) -> str:
     """Execute a write operation via Statement Execution API and log to audit."""
     catalog_name = config.get("catalog", "")
@@ -327,14 +331,16 @@ def _execute_write(
         statement=(
             f"INSERT INTO {catalog_name}.{schema_name}.billing_write_audit "
             f"(audit_id, action_type, target_table, target_record_id, customer_id, "
-            f"executed_by, result_status, result_message, executed_at, "
-            f"initiating_user, executing_principal, persona, request_id, identity_degraded) VALUES "
+            f"agent_session_id, executed_by, result_status, result_message, executed_at, "
+            f"initiating_user, executing_principal, persona, request_id, "
+            f"identity_degraded, user_groups) VALUES "
             f"('{audit_id}', '{action}', "
-            f"'{catalog_name}.{schema_name}.billing_disputes' , "
-            f"'{target_id}', {customer_id}, 'agent', 'PENDING', "
+            f"'{catalog_name}.{schema_name}.billing_disputes', "
+            f"'{target_id}', {customer_id}, '{session_id}', 'agent', 'PENDING', "
             f"'Staged by confirm_write_operation', TIMESTAMP '{now_ts}', "
             f"'{initiating_user}', '{executing_principal}', '{persona}', "
-            f"'{request_id}', {str(identity_degraded).lower()})"
+            f"'{request_id}', {str(identity_degraded).lower()}, "
+            f"'{user_groups.replace(chr(39), chr(39)+chr(39))}')"
         ),
         warehouse_id=warehouse_id,
         wait_timeout="10s",
@@ -363,16 +369,18 @@ def _execute_write(
         statement=(
             f"INSERT INTO {catalog_name}.{schema_name}.billing_write_audit "
             f"(audit_id, action_type, target_table, target_record_id, customer_id, "
-            f"executed_by, sql_statement, result_status, result_message, executed_at, "
-            f"initiating_user, executing_principal, persona, request_id, identity_degraded) VALUES "
+            f"agent_session_id, executed_by, sql_statement, result_status, result_message, "
+            f"executed_at, initiating_user, executing_principal, persona, request_id, "
+            f"identity_degraded, user_groups) VALUES "
             f"('{str(uuid.uuid4())}', '{action}', "
             f"'{catalog_name}.{schema_name}.billing_disputes', "
-            f"'{target_id}', {customer_id}, 'agent', "
+            f"'{target_id}', {customer_id}, '{session_id}', 'agent', "
             f"'{sql.replace(chr(39), chr(39)+chr(39))}', "
             f"'{result_status}', '{result_msg.replace(chr(39), chr(39)+chr(39))}', "
             f"TIMESTAMP '{datetime.now(timezone.utc).isoformat()}', "
             f"'{initiating_user}', '{executing_principal}', '{persona}', "
-            f"'{request_id}', {str(identity_degraded).lower()})"
+            f"'{request_id}', {str(identity_degraded).lower()}, "
+            f"'{user_groups.replace(chr(39), chr(39)+chr(39))}')"
         ),
         warehouse_id=warehouse_id,
         wait_timeout="10s",
@@ -461,22 +469,27 @@ def _get_msg_content(msg) -> str:
 ###############################################################################
 
 def _filter_tools_for_persona(persona: str) -> list[BaseTool]:
-    """Return the subset of tools allowed for the given persona."""
-    # Validate persona-group binding if user context exists
-    ctx = _get_request_context()
-    if ctx:
-        persona_groups = config.get("persona_group_map", {})
-        if persona_groups and not validate_persona_for_user(persona, ctx.user_groups, persona_groups):
-            logger.warning(
-                f"User {ctx.user_email} groups {ctx.user_groups} "
-                f"not authorized for persona {persona}. Falling back to customer_care."
-            )
-            persona = "customer_care"
+    """Return the subset of tools allowed for the given persona.
+
+    If a RequestContext is present, validates that the user's groups
+    authorize the requested persona. Falls back to customer_care on denial.
+    """
+    # Persona-group validation (if identity propagation is active)
+    if _IDENTITY_AVAILABLE:
+        ctx = _get_request_context()
+        if ctx:
+            persona_groups = config.get("persona_group_map", {})
+            if persona_groups and not validate_persona_for_user(
+                persona, ctx.user_groups, persona_groups
+            ):
+                logger.warning(
+                    f"Persona denied: user={ctx.user_email} "
+                    f"groups={ctx.user_groups} persona={persona}"
+                )
+                persona = DEFAULT_PERSONA
 
     allowed = _PERSONA_TOOLS.get(persona)
     if not allowed:
-        # No restriction defined — grant all tools (default for customer_care
-        # or when persona YAMLs aren't loaded)
         return tools
     tool_name_set = set(allowed)
     filtered = [t for t in tools if t.name in tool_name_set]
@@ -523,17 +536,20 @@ class BillingChatAgent(ChatAgent):
     ) -> ChatAgentResponse:
         # --- Identity propagation ---
         ctx = None
-        try:
-            raw_ctx = (custom_inputs or {}).get("request_context")
-            if raw_ctx:
-                secret = get_identity_secret()
-                ctx = validate_request_context(raw_ctx, secret)
-                logger.info(f"Authenticated request from {ctx.user_email} persona={ctx.persona}")
-        except IdentityError as e:
-            logger.warning(f"Identity validation failed: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected identity error: {e}")
-
+        if _IDENTITY_AVAILABLE:
+            try:
+                raw_ctx = (custom_inputs or {}).get("request_context")
+                if raw_ctx:
+                    secret = get_identity_secret()
+                    ctx = validate_request_context(raw_ctx, secret)
+                    logger.info(
+                        f"Identity validated: user={ctx.user_email} "
+                        f"persona={ctx.persona} request_id={ctx.request_id}"
+                    )
+            except IdentityError as e:
+                logger.warning(f"Identity validation failed: {e}")
+            except Exception as e:
+                logger.error(f"Identity error: {e}", exc_info=True)
         _set_request_context(ctx)
 
         lc_msgs = self._to_lc_messages(messages)
@@ -542,12 +558,18 @@ class BillingChatAgent(ChatAgent):
             result = graph.invoke({"messages": lc_msgs})
             last = result["messages"][-1]
             content = _get_msg_content(last)
+        except AuthorizationError as e:
+            content = str(e)
+            logger.warning(f"Authorization denied: {e}")
         except Exception as e:
             content = (
                 "I'm sorry, I encountered an error processing your request. "
                 "Please try again or rephrase your question."
             )
-            print(f"ERROR in predict: {e}")
+            logger.error(f"Error in predict: {e}", exc_info=True)
+        finally:
+            _set_request_context(None)  # Clean up thread-local
+
         return ChatAgentResponse(
             messages=[ChatAgentMessage(
                 role="assistant",
@@ -564,17 +586,20 @@ class BillingChatAgent(ChatAgent):
     ) -> Generator[ChatAgentChunk, None, None]:
         # --- Identity propagation ---
         ctx = None
-        try:
-            raw_ctx = (custom_inputs or {}).get("request_context")
-            if raw_ctx:
-                secret = get_identity_secret()
-                ctx = validate_request_context(raw_ctx, secret)
-                logger.info(f"Authenticated request from {ctx.user_email} persona={ctx.persona}")
-        except IdentityError as e:
-            logger.warning(f"Identity validation failed: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected identity error: {e}")
-
+        if _IDENTITY_AVAILABLE:
+            try:
+                raw_ctx = (custom_inputs or {}).get("request_context")
+                if raw_ctx:
+                    secret = get_identity_secret()
+                    ctx = validate_request_context(raw_ctx, secret)
+                    logger.info(
+                        f"Identity validated: user={ctx.user_email} "
+                        f"persona={ctx.persona} request_id={ctx.request_id}"
+                    )
+            except IdentityError as e:
+                logger.warning(f"Identity validation failed: {e}")
+            except Exception as e:
+                logger.error(f"Identity error: {e}", exc_info=True)
         _set_request_context(ctx)
 
         lc_msgs = self._to_lc_messages(messages)
@@ -594,8 +619,15 @@ class BillingChatAgent(ChatAgent):
                                     id=str(uuid.uuid4()),
                                 )
                             )
+        except AuthorizationError as e:
+            logger.warning(f"Authorization denied in stream: {e}")
+            yield ChatAgentChunk(
+                delta=ChatAgentMessage(
+                    role="assistant", content=str(e), id=str(uuid.uuid4()),
+                )
+            )
         except Exception as e:
-            print(f"ERROR in predict_stream: {e}")
+            logger.error(f"Error in predict_stream: {e}", exc_info=True)
             yield ChatAgentChunk(
                 delta=ChatAgentMessage(
                     role="assistant",
@@ -606,6 +638,8 @@ class BillingChatAgent(ChatAgent):
                     id=str(uuid.uuid4()),
                 )
             )
+        finally:
+            _set_request_context(None)  # Clean up thread-local
 
 
 # ── Module-level exports ────────────────────────────────────────────────────

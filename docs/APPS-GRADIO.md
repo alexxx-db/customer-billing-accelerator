@@ -45,7 +45,7 @@ Model Serving Endpoint (custom_inputs: persona + request_context)
 | `app.py` | 567 | Complete 5-tab billing intelligence app |
 | `../shared/serving_client.py` | 248 | Shared identity + endpoint client |
 | `app.yaml` | 12 | Databricks App deployment config |
-| `databricks.yml` | 19 | DAB bundle for dev/prod deployment |
+| `databricks.yml` | 21 | DAB bundle for dev/prod deployment |
 | `requirements.txt` | 6 | `mlflow`, `requests`, `psycopg2-binary` |
 
 ## Identity Flow

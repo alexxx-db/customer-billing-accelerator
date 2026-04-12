@@ -70,20 +70,15 @@ The accelerator needed to support two audiences: (1) teams that want full contro
 
 Both paths coexist because they serve different deployment tiers. The LangGraph path (notebook 03) deploys the full 19-tool agent with write-back, anomaly management, ERP integration, streaming estimates, and persona-based access control. The Agent Bricks path (notebook 04) deploys a Supervisor with only two sub-agents: a FAQ Knowledge Assistant and a Billing Analytics Genie Space. The Agent Bricks path was first prototyped in `c7a8bdd` on `feature/agent-bricks` (January 2026), then completely rewritten and merged to main in `6363a04` (March 2026).
 
-The capability gap is significant and undocumented in the README:
+The capability gap is significant. See the **Deployment Path Capability Matrix** in
+README.md for the canonical 10-row comparison table (updated April 2026). In summary:
+Agent Bricks supports FAQ retrieval and fleet-wide Genie analytics. It does NOT support
+individual customer lookup, write-back, ERP data, streaming, KPIs, persona filtering,
+or identity propagation.
 
-| Capability | LangGraph (nb 03) | Agent Bricks (nb 04) |
-|---|---|---|
-| FAQ retrieval | Yes | Yes |
-| Fleet-wide analytics (Genie) | Yes | Yes |
-| Individual customer lookup | Yes | No |
-| Write-back (disputes, anomalies) | Yes | No |
-| ERP/finance data | Yes | No |
-| Streaming estimates | Yes | No |
-| Operational KPIs | Yes | No |
-| Persona filtering | Yes | No |
-
-The Agent Bricks MAS routing instructions (`agent_bricks/telco-billing-mas.md:16`) redirect individual customer lookups to "dedicated customer care tools" which do not exist in the Agent Bricks deployment.
+The Agent Bricks MAS routing instructions (`agent_bricks/telco-billing-mas.md`) now
+explicitly handle unsupported requests by directing users to the LangGraph deployment
+instead of routing to nonexistent tools (fixed April 2026).
 
 ### Consequences
 

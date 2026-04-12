@@ -131,3 +131,4 @@ Execution order, dependencies, and guidance for every notebook in the accelerato
 - `08c_lakebase_setup` requires Lakebase to be available in your workspace (Public Preview).
 - `12_admin_tagging` GRANT/REVOKE statements require catalog owner or account admin privileges.
 - All notebooks assume `000-config` has been run in the same session.
+- `_helper_seed_upstream_tables.py` is a helper invoked by `02_define_uc_tools` via `%run`. Do not run it directly.

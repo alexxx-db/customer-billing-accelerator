@@ -57,7 +57,8 @@ Sachin Patil <sachin.patil@databricks.com>
 | `10_domain_config` | Domain adapter: reads domain YAML from `notebooks/domains/`, creates canonical views, regenerates UC tools. Run with `domain` = `telco` / `saas` / `utility`. |
 | `10a_validate_domain` | Validates deployed domain: checks canonical views, UC tools, charge column alignment. |
 | `11_persona_config` | Validates all persona YAML configs from `notebooks/personas/`, serializes persona metadata to config.yaml. |
-| `dash-chatbot-app/` | A simple Dash web app that lets users chat with the deployed agent using the Databricks Apps framework. |
+| `dash-chatbot-app/` | Dash chat app with persona selector and identity propagation. Reference chat interface. |
+| `gradio-databricks-app/` | Gradio 5-tab billing intelligence app (Chat, Analytics, Data Integration, Operations, Platform). Preferred for demos. |
 
 ---
 
@@ -78,11 +79,11 @@ Sachin Patil <sachin.patil@databricks.com>
 #### Option A: Full Agent (LangGraph) — Production Tier
 6. **[03_agent_deployment_and_evaluation]** – Build, evaluate, register, and deploy the full LangGraph agent with 19 tools, write-back, persona filtering, and identity propagation.
 7. **[05_billing_anomaly_detection]** – Run anomaly detection pipeline and redeploy.
-8. **[`dash-chatbot-app`]** – Launch the chatbot UI.
+8. Launch an app: **[`dash-chatbot-app`]** (chat-focused) or **[`gradio-databricks-app`]** (multi-workspace, preferred for demos).
 
 #### Option B: Agent Bricks — Managed Read-Only Tier
 6. **[04_agent_bricks_deployment]** – Deploy a Supervisor Agent (KA + Genie Space) for FAQ retrieval and fleet-wide analytics. Read-only; no write-back, no individual customer tools.
-7. **[`dash-chatbot-app`]** – Launch the chatbot UI (set `SERVING_ENDPOINT` to the MAS endpoint).
+7. Launch an app (set `SERVING_ENDPOINT` to the MAS endpoint).
 
 ---
 
@@ -213,10 +214,12 @@ Any issues discovered through the use of this project should be filed as GitHub 
 
 &copy; 2025 Databricks, Inc. All rights reserved. The source in this notebook is provided subject to the Databricks License [https://databricks.com/db-license-source].  All included or referenced third party libraries are subject to the licenses set forth below. 
 
-##This list needs to be updated
-
-| library                                | description             | license    | source                                              |
-|----------------------------------------|-------------------------|------------|-----------------------------------------------------|
-|  | |  |
-
-
+| library | description | license | source |
+|---|---|---|---|
+| langchain / langgraph | Agent orchestration framework | MIT | https://github.com/langchain-ai/langgraph |
+| mlflow | ML lifecycle management, model serving | Apache 2.0 | https://github.com/mlflow/mlflow |
+| databricks-sdk | Databricks Python SDK | Databricks | https://github.com/databricks/databricks-sdk-py |
+| dash | Web application framework | MIT | https://github.com/plotly/dash |
+| gradio | ML demo and app framework | Apache 2.0 | https://github.com/gradio-app/gradio |
+| dbldatagen | Synthetic data generation | Databricks Labs | https://github.com/databrickslabs/dbldatagen |
+| psycopg2 | PostgreSQL adapter for Python | LGPL | https://github.com/psycopg/psycopg2 |

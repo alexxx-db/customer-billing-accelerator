@@ -39,14 +39,19 @@ The current write-back path uses a **SQL warehouse** (an analytical engine optim
 
 Lakebase (managed PostgreSQL) is purpose-built for exactly this workload: low-latency, single-row, transactional CRUD with ACID guarantees.
 
-### What does NOT exist today
+### Implementation Status (Updated April 2026)
 
-- No Lakebase instance provisioned
-- No PostgreSQL schema for operational data
-- No psycopg2 connectivity from agent or app
-- No synced tables between Delta and Lakebase
-- No Lakebase visibility in the Dash or Gradio app
-- The term "Lakebase" appears nowhere in notebook code
+The following items have been implemented:
+- `08c_lakebase_setup.py` (378 lines) — provisions instance, bootstraps PostgreSQL schema
+- `08d_lakebase_sync.py` (180 lines) — synced tables from Lakebase to Delta
+- `08e_validate_lakebase.py` (258 lines) — 7-check validation suite
+- `config.yaml` — 10 Lakebase configuration keys
+- Gradio app — Data Integration tab with live Lakebase connectivity check
+- `requirements.txt` — `psycopg2-binary` added to both apps
+
+**Remaining**: Agent write-path migration (`_execute_write` in agent.py to use
+psycopg2 when Lakebase is available) is designed but not yet wired — writes
+currently fall back to Statement Execution API -> Delta.
 
 ---
 
@@ -218,19 +223,19 @@ Track C: Lakebase → disputes, audit, actions → synced to Delta            [O
 
 ### Component changes
 
-| Component | Current state | Required change | Why | Priority |
-|---|---|---|---|---|
-| `notebooks/08c_lakebase_setup.py` | Does not exist | **Create**: Provision Lakebase instance, bootstrap PostgreSQL schema | Core infrastructure | P0 |
-| `notebooks/08d_lakebase_sync.py` | Does not exist | **Create**: Set up synced tables (Delta <-> Lakebase) | Bridge operational and analytical layers | P0 |
-| `notebooks/08e_validate_lakebase.py` | Does not exist | **Create**: Validate connectivity, schema, read/write, sync | Deployment confidence | P1 |
-| `notebooks/agent.py` | Writes via Statement Execution API to Delta | **Add**: Lakebase write path via `psycopg2` when configured; fall back to current Delta path | Correct engine for transactional writes | P1 |
-| `notebooks/config.yaml` | No Lakebase config | **Add**: `lakebase_instance`, `lakebase_enabled`, `lakebase_sync_tables` | Configuration | P0 |
-| `notebooks/000-config.py` | No Lakebase config | **Add**: Lakebase config keys with defaults | Configuration | P0 |
-| `notebooks/09_writeback_setup.py` | Creates Delta tables only | **Add**: Note that Lakebase alternative exists; keep Delta as fallback | Backwards compatibility | P2 |
-| `apps/dash-chatbot-app/app.yaml` | No Lakebase resource | **Add**: Lakebase database resource binding | App connectivity | P1 |
-| `apps/dash-chatbot-app/requirements.txt` | No psycopg2 | **Add**: `psycopg2-binary` | Required for Lakebase connectivity | P1 |
-| `README.md` | No Lakebase section | **Add**: Track C documentation, setup instructions | Visibility | P2 |
-| `ARCHITECTURE.md` | No Lakebase in architecture | **Add**: Lakebase layer in diagram and component docs | Visibility | P2 |
+| Component | Status | Details |
+|---|---|---|
+| `notebooks/08c_lakebase_setup.py` | **Done** (378 lines) | Provisions instance, bootstraps `billing_ops` schema, verifies read/write |
+| `notebooks/08d_lakebase_sync.py` | **Done** (180 lines) | Synced tables, unified views (`v_all_disputes`, `v_all_audit`) |
+| `notebooks/08e_validate_lakebase.py` | **Done** (258 lines) | 7-check validation: connectivity, schema, tables, round-trip, atomicity, columns |
+| `notebooks/config.yaml` | **Done** | 10 Lakebase keys: `lakebase_enabled`, `lakebase_instance`, `lakebase_schema`, etc. |
+| `notebooks/000-config.py` | **Done** | Lakebase config dict entries with defaults |
+| `apps/dash-chatbot-app/app.yaml` | **Done** | Commented Lakebase resource binding ready to activate |
+| `apps/dash-chatbot-app/requirements.txt` | **Done** | `psycopg2-binary>=2.9.9` added |
+| `apps/gradio-databricks-app/app.py` | **Done** | Data Integration tab with live Lakebase connectivity check |
+| `README.md` | **Done** | Track C section with three-track table |
+| `ARCHITECTURE.md` | **Done** | Lakebase in write-back flow, platform features, file inventory |
+| `notebooks/agent.py` | **Not yet** | Lakebase write path designed but not wired; falls back to Delta |
 
 ### Preserved patterns
 

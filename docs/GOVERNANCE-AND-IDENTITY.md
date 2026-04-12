@@ -67,9 +67,15 @@ The signing payload is the JSON serialization of all fields except `signature`,
 with `sort_keys=True` and `separators=(",",":")` for cross-platform determinism.
 The secret is stored in Databricks Secret Scope `echostar-identity/hmac-secret`.
 
-Both the App-side (`apps/shared/serving_client.py`) and the Agent-side
-(`notebooks/identity_utils.py`) must produce identical signing payloads.
-The pinned separators prevent whitespace differences from breaking verification.
+Both the App-side and the Agent-side (`notebooks/identity_utils.py`) must
+produce identical signing payloads. The pinned separators prevent whitespace
+differences from breaking verification.
+
+**App-side implementations**: The Gradio app uses `apps/shared/serving_client.py`
+(the canonical shared module). The Dash app inlines a copy of `_RequestContext`
+in `apps/dash-chatbot-app/model_serving_utils.py` (predates the shared module).
+Both produce identical bytes. Changes to the signing format must be applied to
+all three files: `identity_utils.py`, `serving_client.py`, and `model_serving_utils.py`.
 
 ### Thread Safety
 

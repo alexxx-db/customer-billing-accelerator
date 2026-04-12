@@ -181,6 +181,7 @@ UC assets are tagged with `gov.*` tags that drive runtime authorization:
 | `gov.pii.level` | `high` / `medium` / `low` / `none` | Drives governed view generation and projection policy |
 | `gov.audit.required` | `true` / `false` | Logs tool access to audit trail |
 | `gov.allowed.personas` | Comma-separated persona names | Blocks tool access for unlisted personas |
+| `gov.projection.policy` | `full` / `redacted` / `minimal` | Controls which columns are visible in governed views |
 | `gov.write.policy` | `user_confirmed` / `sp_allowed` / `blocked` | Controls write authorization |
 | `gov.data.classification` | `confidential` / `internal` / `public` | Informational |
 
@@ -363,8 +364,8 @@ directly.
 | `app.py` | 26 | Entry point — creates Dash app, mounts `DatabricksChatbot` |
 | `DatabricksChatbot.py` | 261 | UI: persona selector, chat history, send/clear callbacks |
 | `model_serving_utils.py` | 216 | Identity context creation, SCIM caching, endpoint call |
-| `app.yaml` | 8 | Databricks App deployment config |
-| `requirements.txt` | 4 | `dash`, `dash-bootstrap-components`, `mlflow`, `requests` |
+| `app.yaml` | 12 | Databricks App deployment config |
+| `requirements.txt` | 5 | `dash`, `dash-bootstrap-components`, `mlflow`, `python-dotenv`, `psycopg2-binary` |
 
 **Identity flow in the Dash app**:
 1. `DatabricksChatbot._call_model_endpoint()` reads `x-forwarded-access-token` from Flask
@@ -491,13 +492,13 @@ the shared `serving_client.py` module. Deployed via DAB (`databricks bundle depl
 ```
 notebooks/agent.py              710 lines   LangGraph agent + ChatAgent wrapper
 notebooks/identity_utils.py     498 lines   Identity propagation, tag resolution, auth guards
-notebooks/config.yaml           194 lines   All configuration (50+ keys)
+notebooks/config.yaml           205 lines   All configuration (60+ keys)
 notebooks/personas/*.yaml         4 files   Persona definitions (64-71 lines each)
 ```
 
 ### Notebooks (run on Databricks clusters)
 ```
-notebooks/000-config.py         261 lines   Config setup (Python dict)
+notebooks/000-config.py         269 lines   Config setup (Python dict)
 notebooks/00_data_preparation   459 lines   Synthetic data via dbldatagen
 notebooks/01_create_vector...   186 lines   FAQ vector search index
 notebooks/02_define_uc_tools    656 lines   14 UC functions + PII isolation + grants
@@ -512,9 +513,9 @@ notebooks/06c_monitoring_...    128 lines   Alert dispatch
 notebooks/07_system_table...    660 lines   System table telemetry
 notebooks/08_federation_...      99 lines   Lakehouse Federation (Track A)
 notebooks/08a_erp_data_...      204 lines   ERP simulation (Track B)
-notebooks/08c_lakebase_...      270 lines   Lakebase setup (Track C)
-notebooks/08d_lakebase_sync     125 lines   Lakebase-to-Delta sync
-notebooks/08e_validate_...      200 lines   Lakebase validation
+notebooks/08c_lakebase_...      378 lines   Lakebase setup (Track C)
+notebooks/08d_lakebase_sync     180 lines   Lakebase-to-Delta sync
+notebooks/08e_validate_...      258 lines   Lakebase validation
 notebooks/08b_external_data...  254 lines   ERP medallion pipeline
 notebooks/09_writeback_...      132 lines   Write-back infrastructure
 notebooks/09a_dispute_aging     120 lines   Dispute SLA enforcement

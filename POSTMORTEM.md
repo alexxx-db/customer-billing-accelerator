@@ -44,7 +44,7 @@ pipeline falls behind.
 
 **Category:** pii
 **Severity:** P1
-**Status:** Not fixed
+**Status:** Fixed (April 2026)
 
 **What happened:**
 During a persona configuration change (adding a new `technical` persona with a modified system prompt), the confidentiality instruction was inadvertently deprioritized in the prompt ordering. In a test session, the agent responded to "what's the contact information for customer 4401?" with the customer's name, email, and phone number retrieved from `lookup_customer`. No error was raised. The function call succeeded and returned the fields; the agent simply included them in the response.
@@ -61,13 +61,16 @@ Added an explicit confidentiality restatement to each persona YAML `system_promp
 **What should have been done instead:**
 Remove PII fields from the `lookup_customer` function schema entirely. Create a separate internal lookup function that returns PII for audit/logging only and is not registered as an agent tool. The agent should never receive `customer_name`, `email`, or `phone_number` in a tool response. If the tool does not return the field, the agent cannot disclose it regardless of prompt state. This is a function schema fix in `02_define_uc_tools.py`, not a prompt fix.
 
+**Resolution (April 2026):**
+Three changes applied: (1) `lookup_customer` RETURNS TABLE reduced to `customer_id`, `device_id`, `plan`, `contract_start_dt` — PII fields removed at the schema level. (2) Internal PII function moved to `{schema}_internal` schema with `REVOKE USE SCHEMA` from agent SP and `REVOKE SELECT` on raw `customers` table. (3) Genie Space instructions added to block PII table/function references. See DEC-018.
+
 ---
 
 ### PM-002: Write Confirmation Bypass via Direct Tool Call
 
 **Category:** write-back
 **Severity:** P1
-**Status:** Not fixed
+**Status:** Fixed (April 2026)
 
 **What happened:**
 In evaluation testing with a modified prompt (shorter, fewer guidelines), the agent called `create_billing_dispute` directly in response to "create a dispute for customer 4401 for $50" — without first calling `request_write_confirmation` and without presenting a confirmation request to the user. A billing dispute was created in the Delta table. No error was raised because the tool call was valid. The audit trail showed a PENDING record (from the two-INSERT pattern in `_execute_sql`) but no human confirmation step.
@@ -83,6 +86,9 @@ The `confirm_or_cancel` node exists and handles the case where `request_write_co
 
 **What should have been done instead:**
 Add a guard function to each write tool (`acknowledge_anomaly`, `create_billing_dispute`, `update_dispute_status`) that checks whether the most recent `WRITE_PENDING_PREFIX` sentinel in the message history matches the action being executed. If no matching sentinel exists, the tool returns an error rather than executing: `"BLOCKED: This action requires confirmation. Call request_write_confirmation first."` This is a 5-line code change per write tool in `agent.py`. It converts a soft control into a hard one.
+
+**Resolution (April 2026):**
+The write architecture was replaced with a token-gated mediation pattern (DEC-017). Write operations now go through `request_write_confirmation` (stages a token in `_pending_writes`) → `confirm_write_operation` (validates token + requires `RequestContext`). The `confirm_write_operation` function has two hard guards: (1) valid pending-write token must exist in the store, (2) valid signed `RequestContext` with user identity must be present — if either is missing, the write is blocked at the code level. The original direct-write tools (`acknowledge_anomaly`, `create_billing_dispute`, `update_dispute_status`) are no longer registered — all writes go through the token-gated path. Additionally, input validation was added: `customer_id` validated as `int()`, `action` checked against an allowlist, `target_id` validated with identifier regex, all strings escaped via `_sanitize_sql_value()`.
 
 ---
 
@@ -264,7 +270,7 @@ Partition the streaming aggregation by `event_month` and add a watermark: `.with
 
 **Category:** observability
 **Severity:** P2
-**Status:** Not fixed
+**Status:** Partially fixed (April 2026) — session linkage fixed, shared warehouse remains
 
 **What happened:**
 Two issues surfaced together in the production audit review: (1) all write audit records have `agent_session_id = NULL` because `session_id` is hardcoded to `None` in all `_execute_sql` calls — visible at `agent.py:413` (`session_id=None`), `agent.py:457` (`session_id=None`), and `agent.py:497` (`session_id=None`). This makes it impossible to reconstruct which agent conversation triggered which write operations. (2) All write operations share the single `warehouse_id` from `config.yaml:5` (`148ccb90800933a1`). In a multi-user deployment with concurrent customer service agents, all write operations queue against the same warehouse, causing contention during peak hours and average write latency increases from ~1.5s to 8-12s (est).
@@ -281,13 +287,16 @@ Nothing.
 **What should have been done instead:**
 (1) Pass `session_id` from the `ChatContext` object (available in the `predict()` method at `agent.py:669`) into the LangGraph state as a custom field. The write tools can then read it from state rather than requiring a function parameter. This requires extending `ChatAgentState` with a `session_id: str` field and populating it in `predict()`. (2) Create a dedicated SQL warehouse for write operations with autoscaling, separate from the read/analytics warehouse. Write operations are low-throughput but latency-sensitive; they should not queue behind Genie analytics queries.
 
+**Resolution (April 2026 — partial):**
+Session linkage fixed via the identity propagation system (DEC-017). The `RequestContext` carries `session_id` from the App layer. `confirm_write_operation` passes `ctx.session_id` to `_execute_write`, which records it as `agent_session_id` in the audit INSERT. Six new audit columns added: `initiating_user`, `executing_principal`, `persona`, `request_id`, `identity_degraded`, `user_groups`. The `Dash app generates a UUID per `DatabricksChatbot` instance as the session ID. **Not fixed:** shared warehouse for all write operations — this remains a deployment-level concern requiring a dedicated write warehouse.
+
 ---
 
 ### PM-011: lookup_billing_items Returns Unbounded Result Set
 
 **Category:** tool-design
 **Severity:** P2
-**Status:** Not fixed
+**Status:** Fixed (April 2026)
 
 **What happened:**
 For high-activity devices, `lookup_billing_items` returned thousands of rows. The UC function (`02_define_uc_tools.py:96-121`) has no `LIMIT` clause — it returns all records for a device ordered by `event_ts DESC`. When the agent called this tool for a device with 18 months of billing events (~2,000 rows (est)), the full result set was injected into the LLM context window. This consumed a significant fraction of the available context, pushed earlier messages out during `_trim_history`, and degraded response quality for the remainder of the conversation.
@@ -304,13 +313,16 @@ Nothing.
 **What should have been done instead:**
 Add `LIMIT 100` to the `lookup_billing_items` function definition. For billing inquiry purposes, the most recent 100 events per device are sufficient. If the full history is needed, the agent should use `ask_billing_analytics` to run an aggregation query via Genie rather than loading raw events into the LLM context.
 
+**Resolution (April 2026):**
+`LIMIT 100` added to `lookup_billing_items`. Audit of all 14 UC functions found 5 additional unbounded functions. All now bounded — see DEC-019 for the full matrix. Key changes: `lookup_billing` gained a `lookback_months DEFAULT 12` parameter with `LEAST(lookback_months, 36)` cap; `lookup_operational_kpis` and `get_finance_operations_summary` gained `LEAST()` caps on their lookback parameters; all functions now have explicit `LIMIT` clauses. PK-filtered functions (`lookup_customer`, `lookup_customer_erp_profile`) return 0-1 rows by design and do not need LIMIT.
+
 ---
 
 ### PM-012: Base Agent Logged to MLflow Without Persona Filtering
 
 **Category:** deployment
 **Severity:** P2
-**Status:** Not fixed
+**Status:** Fixed (April 2026)
 
 **What happened:**
 The agent logged to MLflow in notebook 03 is the base agent (`agent.py:711-712`: `agent = create_tool_calling_agent(llm, tools, system_prompt)` / `AGENT = LangGraphChatAgent(agent)`). This base agent has all 19 tools bound. While `LangGraphChatAgent.predict()` supports persona selection via `custom_inputs.get("persona")` (`agent.py:673`), the default path when no persona is specified uses the base agent with all tools. The Dash app (`apps/dash-chatbot-app/`) sends messages without `custom_inputs`, meaning production users through the Dash UI always get the base agent with all 19 tools and no persona filtering.
@@ -326,6 +338,9 @@ The `DEFAULT_PERSONA = "customer_care"` default ensures the persona path is alwa
 
 **What should have been done instead:**
 Remove the base agent construction at `agent.py:711` or replace it with a no-tools placeholder. The `LangGraphChatAgent.__init__` should accept the persona system as primary, not a pre-built agent. If the persona system fails to load, the fallback should be the `customer_care` persona built from the base prompt with explicitly scoped tools, not an agent with all 19 tools.
+
+**Resolution (April 2026):**
+`BillingChatAgent.__init__` no longer pre-builds an all-tools graph. The `self._default_graph` was removed. `self._persona_graphs` is an empty dict populated lazily on first use per persona. `_get_graph()` always builds through `_filter_tools_for_persona()`, which applies persona-group binding validation when a `RequestContext` is present. The base agent with all 19 tools is never constructed.
 
 ---
 
@@ -462,18 +477,24 @@ and then adds. The base agent construction at `agent.py:711` should not exist.
 
 ## Section 5: Current State Gaps
 
-| Gap | Triggered by | Effort | Priority |
-|---|---|---|---|
-| PII removed from `lookup_customer` schema | PM-001 | Low | P0 |
-| Code-level write confirmation guard in each write tool | PM-002 | Low | P0 |
-| Deployment path capability matrix in README | PM-006 | Low | P0 |
-| `WRITE_PENDING` search full history (not `messages[-4:]`) | PM-003 | Low | P0 |
-| `LIMIT` clause added to `lookup_billing_items` | PM-011 | Low | P0 |
-| `session_id` from ChatContext passed to write audit | PM-010 | Low | P1 |
-| `anomaly_uuid` surrogate key in `billing_anomalies` | PM-007 | Low | P1 |
-| `billing_monthly_running` watermark + stateful aggregation | PM-009 | Medium | P1 |
-| Dedicated write warehouse (not shared with analytics) | PM-010 | Low | P1 |
-| `_trim_history`: preserve initial tool call results | PM-004 | Medium | P1 |
-| Remove base agent construction at `agent.py:711` | PM-012 | Low | P1 |
-| Genie keep-warm ping scheduled job | PM-005 | Low | P2 |
-| Operational tool docstrings rewritten as mutually exclusive | PM-008 | Low | P2 |
+| Gap | Triggered by | Effort | Priority | Status |
+|---|---|---|---|---|
+| PII removed from `lookup_customer` schema | PM-001 | Low | P0 | **Fixed** (April 2026) |
+| PII function isolated in `_internal` schema with UC grants | PM-001 | Low | P0 | **Fixed** (April 2026) |
+| Code-level write confirmation guard in each write tool | PM-002 | Low | P0 | **Fixed** (April 2026) |
+| SQL injection hardening in `_execute_write` | PM-002 | Low | P0 | **Fixed** (April 2026) |
+| Deployment path capability matrix in README | PM-006 | Low | P0 | **Fixed** (April 2026) |
+| `WRITE_PENDING` search full history (not `messages[-4:]`) | PM-003 | Low | P0 | Not fixed |
+| `LIMIT` clause added to `lookup_billing_items` | PM-011 | Low | P0 | **Fixed** (April 2026) |
+| All UC functions bounded with LIMIT | PM-011 | Low | P0 | **Fixed** (April 2026) |
+| Identity propagation (RequestContext, HMAC, SCIM) | PM-001, PM-010 | Medium | P0 | **Fixed** (April 2026) |
+| `session_id` from identity context passed to write audit | PM-010 | Low | P1 | **Fixed** (April 2026) |
+| Dual-identity audit columns (human + SP) | PM-010 | Low | P1 | **Fixed** (April 2026) |
+| Remove base agent construction at `agent.py:711` | PM-012 | Low | P1 | **Fixed** (April 2026) |
+| `anomaly_uuid` surrogate key in `billing_anomalies` | PM-007 | Low | P1 | Not fixed |
+| `billing_monthly_running` watermark + stateful aggregation | PM-009 | Medium | P1 | Not fixed |
+| Dedicated write warehouse (not shared with analytics) | PM-010 | Low | P1 | Not fixed |
+| `_trim_history`: preserve initial tool call results | PM-004 | Medium | P1 | Not fixed |
+| Genie keep-warm ping scheduled job | PM-005 | Low | P2 | Not fixed |
+| Operational tool docstrings rewritten as mutually exclusive | PM-008 | Low | P2 | Not fixed |
+| Inline `_RequestContext` extracted to shared package | DEC-017 | Low | P2 | Not fixed |

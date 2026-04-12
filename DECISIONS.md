@@ -663,7 +663,190 @@ The CI workflow does not function. There is no operational CI/CD for this reposi
 
 ---
 
+## DEC-017: EchoStar Identity Propagation (Pattern C — Hybrid)
+
+**Status:** Implemented
+**Date:** 2026-04-10
+
+### Context
+
+PM-001 (PII disclosure), PM-002 (write confirmation bypass), and PM-010 (no session linkage
+in audit) all stem from the same root cause: the agent has no knowledge of who the human
+user is. The serving endpoint runs as a service principal. The Dash app has the user's OAuth
+token (via `x-forwarded-access-token`) but does not forward it. Write operations execute
+under SP identity with no human attribution.
+
+### Options Considered
+
+| Option | Why not chosen (if applicable) |
+|---|---|
+| Pattern A: Full user-context passthrough (user token forwarded to serving) | Model Serving does not support per-request OAuth delegation. The SP executes all SQL regardless of who triggered it. |
+| Pattern B: Pure SP mediation (no user context) | This is what existed — and it caused PM-001, PM-002, PM-010. |
+| Pattern C: Hybrid — user context for reads via governed views, token-gated mediation for writes | Chosen. |
+
+### Decision
+
+Pattern C (Hybrid) was chosen because it works within Model Serving constraints (SP executes
+all SQL) while propagating human identity for authorization and audit:
+
+1. **App layer** extracts `x-forwarded-access-token`, calls SCIM `/Me` to resolve email + groups,
+   builds a `RequestContext` dataclass, signs it with HMAC-SHA256 (secret from Databricks Secret
+   Scope), and sends it in `custom_inputs.request_context`.
+
+2. **Agent layer** validates the signature, checks expiry, stores the `RequestContext` in a
+   `contextvars.ContextVar` (per-request, thread-safe, generator-safe via `copy_context()`).
+
+3. **Write tools** check for valid `RequestContext` before executing — this is a code-level
+   hard guard, not a prompt convention. If no context is present, the write is blocked and the
+   token is preserved for retry.
+
+4. **Audit trail** records dual identity: `initiating_user` (human from RequestContext) and
+   `executing_principal` (SP). `identity_degraded=true` when user context is unavailable.
+
+5. **Persona-group binding**: `persona_group_map` in config restricts which Databricks groups
+   can use which personas. Validated at tool-filtering time, not prompt time.
+
+The `contextvars.ContextVar` was chosen over `threading.local()` after discovering that
+`threading.local` leaks identity across requests when Model Serving reuses threads before a
+streaming generator is fully consumed. `copy_context()` snapshots the identity at `predict_stream()`
+call time and wraps each `next()` on the inner generator in `snapshot.run()`, so the generator
+always sees its original identity even if the thread moves on to a new request.
+
+### Consequences
+
+**Accepted tradeoffs:**
+- HMAC signing is symmetric — if the secret leaks, contexts can be forged. Rotation requires
+  a coordinated secret scope update + serving endpoint restart.
+- SCIM is called on every request from the App layer (mitigated with 5-minute TTL cache per token).
+- `model_serving_utils.py` inlines a copy of `_RequestContext` to avoid import path issues. The
+  App-side and Agent-side signing must produce identical bytes — pinned JSON separators
+  `(",",":")` and `sort_keys=True` enforce this, but it is a drift risk.
+- Backwards compatible: if `request_context` is absent from `custom_inputs`, the agent works
+  with degraded identity. Only assets tagged `gov.identity.mode=required` block access.
+
+**What this locks in:**
+- Every Databricks App deployment must have access to the `echostar-identity` secret scope.
+- The Dash/Gradio app must run behind Databricks Apps proxy (which provides `x-forwarded-access-token`).
+
+### Open questions / deferred work
+
+- Inline `_RequestContext` in `model_serving_utils.py` should be extracted to a shared package
+  to eliminate drift risk (tracked as M12).
+
+---
+
+## DEC-018: PII Function Isolation via Schema Separation and UC Grants
+
+**Status:** Implemented
+**Date:** 2026-04-12
+
+### Context
+
+PM-001 established that PII must be removed from `lookup_customer`'s response schema. The fix
+(removing PII columns from RETURNS TABLE) was applied in April 2026. However, a `lookup_customer_pii_internal`
+function was initially created in the same schema as all other agent tools. The Genie Space
+(`ask_billing_analytics`) has write SQL access to the same schema via its warehouse, meaning
+it could potentially call the PII function or query the raw `customers` table directly — even
+though the function is not registered as an agent tool.
+
+### Options Considered
+
+| Option | Why not chosen (if applicable) |
+|---|---|
+| Keep PII function in same schema, rely on "not registered" as guard | The Genie Space can generate arbitrary SQL. Discoverability via `SHOW FUNCTIONS` or `information_schema.routines` makes this a soft control. |
+| Move PII function to a separate schema with restricted grants | Chosen. |
+| Delete PII function entirely | Backend audit processes need full customer data for dispute investigation and regulatory reporting. |
+
+### Decision
+
+Four-layer defense:
+
+1. **Schema isolation**: PII function moved to `{schema}_internal` — a separate UC schema that
+   the agent SP and Genie warehouse cannot access.
+
+2. **UC grants**: `REVOKE USE SCHEMA` on `{schema}_internal` from agent SP. `REVOKE SELECT` on
+   raw `customers` table from agent SP. `GRANT EXECUTE` on safe `lookup_customer` function
+   (definer rights allow the function to read `customers` even though the SP cannot).
+
+3. **Genie Space instructions**: Curated `instructions` field in Genie Space configuration with
+   explicit rules: never query `customers` directly, never reference `*pii*` or `*_internal*`
+   functions/schemas, never include PII columns in output.
+
+4. **Governance tags**: `{schema}_internal` tagged with `gov.pii.level=high`,
+   `gov.identity.mode=required`, `gov.allowed.personas=admin`.
+
+### Consequences
+
+**Accepted tradeoffs:**
+- `REVOKE SELECT` on `customers` means the agent cannot query the raw table directly. The
+  non-PII `lookup_customer` function uses definer rights (executes as the function creator,
+  not the caller) to read the table through the function. This is correct UC behavior.
+- Genie instructions are a soft control — they guide SQL generation but are not an
+  enforcement boundary. They are layered on top of the hard UC grants.
+- `GRANT`/`REVOKE` statements require the notebook runner to be a catalog owner or account
+  admin. If they fail, they must be applied manually via Catalog Explorer.
+
+---
+
+## DEC-019: UC Function Result Set Bounding
+
+**Status:** Implemented
+**Date:** 2026-04-12
+
+### Context
+
+PM-011 identified that `lookup_billing_items` returned unbounded result sets. Review in April
+2026 found the same issue in 5 additional functions: `lookup_billing` (unbounded invoice
+history), `get_monitoring_status`, `lookup_operational_kpis`, `lookup_job_reliability`,
+`lookup_revenue_attribution`, and `get_finance_operations_summary`.
+
+UC function tools return their full result set as a serialized string in the LLM's context
+window. Unbounded queries create three failure modes: (1) context window overflow causing
+truncated or degraded responses, (2) Statement Execution API timeouts on the 30s
+`wait_timeout`, (3) excessive token consumption on data the LLM cannot usefully process.
+
+### Options Considered
+
+| Option | Why not chosen (if applicable) |
+|---|---|
+| Add `LIMIT N` to each function | Chosen as the baseline — simple, declarative, no code changes needed in agent.py. |
+| Add lookback parameters with `LEAST()` caps | Chosen in combination with LIMIT for time-series functions — gives the agent control over recency while preventing unbounded scans. |
+| Implement pagination in agent tool calls | Overly complex for the current use case. The agent has no mechanism to request "page 2" of a tool result. |
+| Truncate results in `UCFunctionToolkit` | Would require patching the SDK layer. Fragile and version-dependent. |
+
+### Decision
+
+All 14 UC functions are now bounded via one or more of:
+
+| Bound type | Functions | Rationale |
+|---|---|---|
+| `LIMIT N` | All 14 functions | Safety net — caps absolute row count regardless of filter effectiveness |
+| `LEAST(param, cap)` in WHERE clause | `lookup_billing`, `lookup_operational_kpis`, `get_finance_operations_summary` | Caps the lookback parameter at the SQL level so even a malformed agent call cannot request unbounded history |
+| `DEFAULT` parameter value | `lookup_billing` (`lookback_months DEFAULT 12`) | Backwards compatible — existing tool calls without the parameter still work with a reasonable default |
+| PK filter (`WHERE pk = TRY_CAST(...)`) | `lookup_customer`, `lookup_customer_erp_profile` | Returns 0-1 rows by design — LIMIT is unnecessary |
+| `num_results` parameter | `billing_faq` (vector_search) | Bounded by the vector search API |
+
+Specific LIMIT values were chosen based on the data model:
+- Monthly data: LIMIT 100 (8+ years), with `LEAST` cap at 36 months for `lookup_billing`
+- Daily data: LIMIT 90 (3 months), with `LEAST` cap at 90 days
+- Per-customer monthly revenue: LIMIT 36 (3 years)
+- Aggregated summaries: LIMIT 200 (accommodates multi-segment breakdowns)
+- Job/anomaly lists: LIMIT 100 or 50
+
+### Consequences
+
+**Accepted tradeoffs:**
+- If a customer has more than 100 billing items, the oldest events are not returned.
+  The agent can use `ask_billing_analytics` (Genie) for full-history aggregations.
+- The `lookback_months DEFAULT 12` parameter change in `lookup_billing` alters the function
+  signature. Existing UC function references in the toolkit will pick up the new signature
+  on the next serving container cold start.
+
+---
+
 ## Decision Dependencies
+
+
 
 | Decision | Depends on | Constrains |
 |---|---|---|
@@ -683,6 +866,9 @@ The CI workflow does not function. There is no operational CI/CD for this reposi
 | DEC-014 (dispute aging job) | DEC-003 (Statement Execution API pattern) | — |
 | DEC-015 (telemetry materialization) | — | DEC-006 (telemetry tools in tool set) |
 | DEC-016 (feature/dabsdeploy) | — | — (vestigial) |
+| DEC-017 (identity propagation) | DEC-001 (LangGraph predict()), DEC-003 (write audit), DEC-010 (persona YAML) | DEC-018 (PII isolation assumes identity exists for authorization) |
+| DEC-018 (PII schema isolation) | DEC-005 (PII in lookup_customer — the problem), DEC-017 (identity context for grant model) | DEC-007 (Genie Space instructions updated) |
+| DEC-019 (result set bounding) | DEC-007 (Genie as fallback for full-history queries) | — |
 
 ---
 

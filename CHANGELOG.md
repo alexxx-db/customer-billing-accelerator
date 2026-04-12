@@ -10,6 +10,99 @@ Contributors: Alex Barreto, Kyra Wulffert, a0x8o, service-jira-pub-repo-auto
 
 ---
 
+## April 2026
+
+### Identity Propagation (EchoStar)
+
+- **Added** Governed identity propagation system (Pattern C — Hybrid). Signed `RequestContext` flows from Databricks App through Model Serving to agent tools. HMAC-SHA256 signing with secret from Databricks Secret Scope. SCIM `/Me` integration for user email + group resolution. (`2026-04-10`)
+  - `notebooks/identity_utils.py`: new file (392 lines) — `RequestContext` dataclass, HMAC signing/verification, SCIM client, UC tag resolution with inheritance (object > schema > catalog), authorization guards, persona-group binding validation
+  - `notebooks/agent.py`: identity validation in `predict()`/`predict_stream()`, per-request `contextvars.ContextVar` propagation with `copy_context()` snapshot for generator isolation, `_IDENTITY_AVAILABLE` graceful degradation
+  - `notebooks/config.yaml`: `identity_secret_scope`, `identity_secret_key`, `identity_context_ttl_minutes`, `identity_default_mode`, `persona_group_map` ⚠️ Config change
+  - `notebooks/personas/*.yaml`: `required_groups` field added to all four personas
+
+### Security & PII
+
+- **Fixed** PII removed from `lookup_customer` UC function response schema — `customer_name`, `email`, `phone_number` no longer returned. Prompt-only PII guard replaced with schema-level enforcement. (PM-001 fix) (`2026-04-10`)
+  - `notebooks/02_define_uc_tools.py`: RETURNS TABLE reduced to `customer_id`, `device_id`, `plan`, `contract_start_dt`
+
+- **Added** PII function isolated in `{schema}_internal` schema with UC grant restrictions. `REVOKE USE SCHEMA` on internal schema from agent SP, `REVOKE SELECT` on raw `customers` table from agent SP, `GRANT EXECUTE` on safe `lookup_customer` function (definer rights). (PM-001 + H7 fix) (`2026-04-12`)
+  - `notebooks/02_define_uc_tools.py`: `lookup_customer_pii_internal` moved to `{schema}_internal.lookup_customer_pii`, old function dropped from main schema, UC grant/revoke statements added
+
+- **Fixed** SQL injection vulnerabilities in `_execute_write` — `customer_id` validated as `int()`, `action` validated against allowlist, `target_id` validated with identifier regex, all string values passed through `_sanitize_sql_value()`. (`2026-04-11`)
+  - `notebooks/agent.py`: `_sanitize_sql_value()`, `_validate_identifier()` functions added, `_execute_write` rewritten
+
+- **Fixed** SQL injection in `identity_utils.py` tag queries — `catalog`, `schema`, `asset_name` validated with `_validate_sql_identifier()` before SQL interpolation. (`2026-04-11`)
+  - `notebooks/identity_utils.py`: `_validate_sql_identifier()` added to `_fetch_tags()`
+
+- **Fixed** SQL injection in `12_admin_tagging.py` — tag keys/values validated against regex allowlists before interpolation into `ALTER TABLE SET TAGS`. (`2026-04-11`)
+  - `notebooks/12_admin_tagging.py`: input validation added to `bulk_apply_tags()`
+
+### Write-Back & Authorization
+
+- **Fixed** Write confirmation bypass eliminated — `confirm_write_operation` now has hard guards: (1) valid pending-write token required, (2) valid `RequestContext` with user identity required. TOCTOU race fixed by checking identity before popping token from store. (PM-002 fix) (`2026-04-10`)
+  - `notebooks/agent.py`: `confirm_write_operation` rewritten with atomic identity+token check under lock
+
+- **Changed** Audit trail enhanced with dual-identity columns: `initiating_user` (human), `executing_principal` (SP), `persona`, `request_id`, `identity_degraded`, `user_groups`. Both PENDING and SUCCESS/FAILED audit INSERTs include identity fields. Audit PENDING insert now verified before business write proceeds. (PM-010 fix) (`2026-04-10`) ⚠️ Schema change
+  - `notebooks/09_writeback_setup.py`: 6 new columns in `billing_write_audit` CREATE TABLE + ALTER TABLE fallback
+  - `notebooks/agent.py`: `_execute_write` signature extended, audit INSERT verified
+
+### Tools & UC Functions
+
+- **Fixed** `lookup_billing` unbounded result set — added `lookback_months INT DEFAULT 12` parameter with `LEAST(lookback_months, 36)` cap and `LIMIT 100`. Backwards compatible via DEFAULT. (M14 fix) (`2026-04-12`)
+  - `notebooks/02_define_uc_tools.py`: function signature and query rewritten
+
+- **Fixed** `lookup_billing_items` unbounded result set — added `LIMIT 100`. (PM-011 fix) (`2026-04-10`)
+
+- **Fixed** Remaining unbounded UC functions — LIMIT added to all 14 functions. (`2026-04-12`)
+  - `get_monitoring_status` (LIMIT 200), `lookup_operational_kpis` (LIMIT 90 + `LEAST(lookback_days, 90)`), `lookup_job_reliability` (LIMIT 100), `lookup_revenue_attribution` (LIMIT 36), `get_finance_operations_summary` (LIMIT 200 + `LEAST(lookback_months, 24)`), `lookup_billing_plans` (LIMIT 100)
+
+### Performance & Scale
+
+- **Changed** Request-scoped identity storage migrated from `threading.local()` to `contextvars.ContextVar`. Generator streaming uses `copy_context()` snapshot with per-step `snapshot.run(next, inner)` to maintain identity isolation when thread is reused before generator is fully consumed. (`2026-04-11`)
+  - `notebooks/agent.py`: `_request_context_var` replaces `_request_context_local`, `predict_stream` split into outer wrapper + `_do_stream` inner generator
+
+- **Changed** `WorkspaceClient` reused via module-level singleton (`_ws_client`) in `agent.py` and `@lru_cache(maxsize=1)` in `identity_utils.py`. Eliminates per-call client instantiation in analytics tool, write tools, and tag resolution. (`2026-04-11`)
+  - `notebooks/agent.py`: `_ws_client = WorkspaceClient()` at module level
+  - `notebooks/identity_utils.py`: `_get_workspace_client()` cached
+
+- **Changed** Tag resolution results cached with 5-minute TTL in `resolve_asset_policy()`. `_get_warehouse_id()` cached with `@lru_cache`. HMAC secret cache protected with `threading.Lock` (double-checked locking). (`2026-04-11`)
+
+- **Changed** SCIM `/Me` results cached per token with 5-minute TTL in `model_serving_utils.py`. (`2026-04-11`)
+
+- **Changed** LangGraph `recursion_limit` now explicitly passed to `g.compile()` from config (default 30). (`2026-04-11`)
+
+### Genie Space
+
+- **Changed** Genie Space instructions added to prevent PII access — explicit rules against querying `customers` table directly, calling `*pii*` or `*_internal*` functions, or including PII columns in output. (`2026-04-12`)
+  - `notebooks/03a_create_genie_space.py`: `genie_instructions` added to `serialized_space` config
+
+### App Layer
+
+- **Changed** Dash app identity integration — `x-forwarded-access-token` extracted from Flask headers, `RequestContext` built and signed per request, passed to serving endpoint via `custom_inputs.request_context`. (`2026-04-10`)
+  - `apps/dash-chatbot-app/model_serving_utils.py`: rewritten with inline `_RequestContext` (matching agent-side signing), SCIM call with caching, identity-aware `query_endpoint()`
+  - `apps/dash-chatbot-app/DatabricksChatbot.py`: session UUID per chatbot instance, lazy Flask import
+
+- **Changed** Base agent no longer pre-builds all-tools graph at import time. Persona-specific graphs built lazily on first use. (PM-012 fix) (`2026-04-10`)
+  - `notebooks/agent.py`: `BillingChatAgent.__init__` no longer calls `_build_graph(llm, tools, system_prompt)`
+
+### Admin & Validation
+
+- **Added** Governance tag administration notebook. (`2026-04-10`)
+  - `notebooks/12_admin_tagging.py`: `bulk_apply_tags()`, `validate_tags()`, `generate_governed_views()`, `export_tags_to_delta()` — all working PySpark/SQL
+
+- **Added** Identity setup validation notebook with 9 checks. (`2026-04-10`, extended `2026-04-12`)
+  - `notebooks/12a_validate_identity_setup.py`: secret scope access, RequestContext round-trip, gov.* tag presence, audit column check, PII removal verification, LIMIT check, PII function isolation checks
+
+### Documentation
+
+- **Added** Deployment path capability matrix in README with 10-row comparison table. (`2026-04-10`)
+- **Added** EchoStar Identity Propagation section in README: identity flow, setup steps, backwards compatibility. (`2026-04-10`)
+- **Changed** CLAUDE.md updated with new file inventory and architecture pattern documentation. (`2026-04-10`)
+- **Added** `DECISIONS.md`: DEC-017 (Identity Propagation), DEC-018 (PII Schema Isolation), DEC-019 (UC Function Result Bounding). (`2026-04-12`)
+- **Updated** `POSTMORTEM.md`: PM-001, PM-002, PM-010, PM-011 status updated to fixed. PM-012 status updated to fixed. (`2026-04-12`)
+
+---
+
 ## March 2026
 
 ### Agent & Prompt

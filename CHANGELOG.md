@@ -3,7 +3,7 @@
 All notable changes to `customer-billing-accelerator` are recorded here.
 
 Branches covered: `main`, `feature/agent-bricks`, `feature/upgrades`, `feature/best-practices`, plus 12 merged feature branches (see Branch Notes).
-Commits: 2025-07-21 – 2026-03-29
+Commits: 2025-07-21 – 2026-04-12
 Contributors: Alex Barreto, Kyra Wulffert, a0x8o, service-jira-pub-repo-auto
 
 **Organization:** Option A (chronological by month). No version tags exist in the git history.

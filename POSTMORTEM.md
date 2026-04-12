@@ -165,7 +165,7 @@ Implement a keep-warm ping: a lightweight scheduled job (every 10 minutes during
 
 **Category:** deployment
 **Severity:** P1
-**Status:** Not fixed
+**Status:** Fixed (April 2026)
 
 **What happened:**
 A customer deployment team ran notebooks 01-04 in sequence as documented. They used notebook 04 (Agent Bricks Supervisor) as their production deployment because the Agent Bricks UI is easier to manage. They then asked why the billing agent could not acknowledge anomalies, create disputes, check ERP credit status, or show real-time billing estimates — all capabilities described in the README and present in the earlier notebooks.
@@ -177,23 +177,13 @@ The README presents the notebook sequence as additive ("Follow the notebooks in 
 Notebook 03 deploys a full LangGraph `ChatAgent` with 19 tools: 14 UC read tools + 5 write-back tools (`agent.py:268-543`), including anomaly acknowledgement, dispute creation, ERP profile, revenue attribution, streaming estimates, and operational KPIs. Notebook 04 (`04_agent_bricks_deployment.py:246-262`) deploys an Agent Bricks Supervisor with exactly two agents: a FAQ Knowledge Assistant and a Genie Space. The Agent Bricks path has no write-back, no anomaly acknowledgement, no ERP data, no streaming billing estimates, no operational KPI tools, no individual customer lookup tools. The MAS routing instructions (`agent_bricks/telco-billing-mas.md:16`) explicitly redirect individual customer lookups to "dedicated customer care tools" — which do not exist in this deployment.
 
 **What was done:**
-Nothing — the divergence is still undocumented in the README.
+Nothing at the time of the incident.
 
 **What should have been done instead:**
-The README must include a capability comparison table showing what each deployment path provides. If Agent Bricks is the target deployment, the write-back and individual customer tools must be reimplemented as Agent Bricks custom agents. The README should present the deployment path selection as the first decision, not as sequential steps 6 and 7.
+The README must include a capability comparison table showing what each deployment path provides. The README should present the deployment path selection as the first decision, not as sequential steps 6 and 7.
 
-| Capability | LangGraph (nb 03) | Agent Bricks (nb 04) |
-|---|---|---|
-| FAQ retrieval | Yes | Yes |
-| Fleet-wide analytics (Genie) | Yes | Yes |
-| Individual customer billing lookup | Yes | No |
-| Anomaly detection + acknowledgement | Yes | No |
-| Billing dispute creation | Yes | No |
-| ERP credit/AR profile | Yes | No |
-| Real-time streaming estimates | Yes | No |
-| Operational KPIs | Yes | No |
-| Write-back with audit trail | Yes | No |
-| Persona-based tool filtering | Yes | No |
+**Resolution (April 2026):**
+Three changes applied: (1) README restructured with "Option A" / "Option B" deployment tiers and a callout: "Notebooks 03 and 04 are alternative deployment paths, not sequential steps." (2) 10-row capability matrix added to README showing Yes/No per capability per tier. (3) Notebook 04 header markdown now explicitly states what the Agent Bricks tier IS and IS NOT, including a list of capabilities only available in LangGraph. (4) Routing instructions updated to remove reference to nonexistent "dedicated customer care tools" and instead direct users to the LangGraph deployment for unsupported capabilities.
 
 ---
 

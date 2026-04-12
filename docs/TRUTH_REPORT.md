@@ -1,6 +1,10 @@
 # Truth Report: Platform Pillar Audit
 
-Produced 2026-04-12. Covers every file in the repo that touches Agent Bricks, Genie Spaces,
+Originally produced 2026-04-12. **Updated 2026-04-12** after Lakebase implementation
+(notebooks 08c/08d/08e), Gradio app rewrite (5-tab billing intelligence app), and
+Agent Bricks notebook fix (`wait_for_tile` defined, programmatic MAS creation).
+
+Covers every file in the repo that touches Agent Bricks, Genie Spaces,
 Databricks Apps, or Lakebase/Federation. Each entry states exactly what the code does, what
 the docs claim, and where the two diverge.
 
@@ -19,8 +23,9 @@ the docs claim, and where the two diverge.
 | Step 3: Create Supervisor | **Prints manual UI instructions** to the notebook output — tells the user to open `/#/agents` and click through the UI | **No programmatic creation** |
 | Step 4: Test MAS | Calls `w.serving_endpoints.query()` against `mas-{tile_id}-endpoint` | Working code, but depends on Step 3 completing manually |
 
-**Line 314**: `"Note: The Supervisor Agent API is UI-only; no programmatic SDK is available yet."`
-**Line 319**: `wait_for_tile(mas_tile_id, label="MAS")` — this function is **never defined** in the notebook. It will crash at runtime with `NameError`.
+**Fixed (April 2026)**: `wait_for_tile()` is now defined (line 101) and correctly called.
+Programmatic MAS creation via REST API is attempted first; manual fallback provided if API unavailable.
+`mas_tile_id` and `ka_tile_id` are now properly assigned in all code paths.
 
 **What Agent Bricks deploys**: FAQ Knowledge Assistant + Genie Space as sub-agents in a Supervisor. Two capabilities only: FAQ document retrieval and Genie SQL analytics.
 
@@ -40,9 +45,9 @@ the docs claim, and where the two diverge.
 
 ### Overstatements
 
-1. **README line 71**: "fully managed multi-agent experience" — implies production-grade multi-agent orchestration. Reality: 2 sub-agents (FAQ + Genie), read-only, no tool binding, manual UI creation step.
-2. **Notebook 04 line 319**: `wait_for_tile(mas_tile_id)` — references an undefined function. The notebook will crash at this line. This is a runtime bug, not an overstatement, but it means the notebook **cannot run end-to-end without error**.
-3. **Notebook 04 Step 3 framing**: The step title "Create Supervisor Agent" implies the notebook creates it. It prints instructions for the user to create it manually via the UI.
+1. **README line 71** (original): "fully managed multi-agent experience" — overstated for a 2-agent read-only tier. **Fixed**: README now clearly positions Agent Bricks as "Managed Read-Only Tier."
+2. ~~**Notebook 04 `wait_for_tile` undefined**~~ — **Fixed (April 2026)**: Function defined at line 101. All variable references resolved.
+3. ~~**Notebook 04 manual-only MAS creation**~~ — **Fixed (April 2026)**: Programmatic creation via REST API attempted first; manual fallback with structured resume path if API unavailable.
 
 ### What is genuinely good
 
@@ -65,7 +70,7 @@ the docs claim, and where the two diverge.
 | Space creation | Uses `w.genie.create_space()` / `update_space()` with serialized config | Working code |
 | Instructions | 6 PII guardrails injected into Genie Space config | Working code |
 | Test conversation | Sends test question, polls for result, displays SQL + response | Working code |
-| Table registration | 18 tables registered from config | Working code |
+| Table registration | 20 tables registered from config | Working code |
 
 **`notebooks/agent.py`** lines 149-176 — `ask_billing_analytics` tool.
 
@@ -88,7 +93,7 @@ the docs claim, and where the two diverge.
 
 | Document | Claim | Accurate? |
 |---|---|---|
-| README line 40 | "Creates a Databricks Genie Space for ad-hoc billing analytics over invoice and plan tables." | **Accurate but understated** — actually registers 18 tables, not just invoice and plan |
+| README line 40 | "Creates a Databricks Genie Space for ad-hoc billing analytics over invoice and plan tables." | **Accurate but understated** — actually registers 20 tables, not just invoice and plan |
 | ARCHITECTURE.md "Runtime Components" | Documents Genie as fleet-wide analytics delegation, distinct from individual lookups | **Accurate** |
 | DECISIONS.md DEC-007 | Documents Genie choice over UC functions for arbitrary SQL, cold start tradeoff | **Accurate** |
 | POSTMORTEM.md PM-005 | Documents 45-90s cold start on first query after inactivity | **Accurate** — this is a real operational issue |
@@ -156,8 +161,7 @@ the docs claim, and where the two diverge.
 
 ### Overstatements
 
-1. **No mention of "Lakebase" anywhere in the codebase.** The README, DECISIONS.md, ARCHITECTURE.md, and all notebooks use "Lakehouse Federation" or "federation". The term "Lakebase" appears only in the EchoStar identity implementation context (`notebooks/config.yaml` line for secret scope, and in CLAUDE.md). If the market-facing story requires "Lakebase" branding, the current repo does not use or demonstrate it.
-2. **ARCHITECTURE.md** positions the `ext_*` views as a federation pattern. This is accurate for Track A (real foreign catalog). For Track B (simulation), the `ext_*` views just point to local Delta tables — there is no federation happening, just a local abstraction layer pretending to be external data.
+None found for Federation Tracks A/B — docs are accurate and honest.
 
 ### What is genuinely good
 
@@ -166,12 +170,20 @@ the docs claim, and where the two diverge.
 - The Silver/Gold medallion pipeline in `08b` is solid PySpark with proper joins and aggregations.
 - Config-driven track selection (`erp_connection_host` presence) is clean.
 
-### What is missing
+### Lakebase (Track C) — Added April 2026
 
-- **No Lakebase demo** — the repo uses Lakehouse Federation (foreign catalogs), not Lakebase (managed PostgreSQL). These are different Databricks products. If the requirement is to demo Lakebase specifically, the current codebase does not do this.
-- **No visibility in Apps** — neither the Dash app nor the Gradio app surfaces ERP/federated data. The data flows through UC functions (`lookup_customer_erp_profile`, `lookup_revenue_attribution`, `get_finance_operations_summary`) but the user has no indication they are seeing federated/external data.
-- **No demo script** — no guided walkthrough showing the federation value proposition.
-- **Track A is untestable without a real external database** — there is no Docker-compose or local PostgreSQL setup for testing Track A. The only way to test Track A is to have an actual external PostgreSQL ERP system.
+**Previously missing, now implemented.** Three notebooks (`08c_lakebase_setup.py`,
+`08d_lakebase_sync.py`, `08e_validate_lakebase.py`) provision a managed PostgreSQL
+instance, bootstrap the `billing_ops` schema (disputes, audit_log, agent_actions),
+set up synced tables to Delta, and validate connectivity. Config keys added to
+`config.yaml` and `000-config.py`. The Gradio app has a Data Integration tab with
+live Lakebase connectivity checking. README documents Track C.
+See `docs/LAKEBASE_ARCHITECTURE.md` for the full design.
+
+### What is still missing
+
+- **Track A is untestable without a real external database** — there is no Docker-compose or local PostgreSQL setup for testing Track A.
+- **Lakebase depends on workspace availability** — Lakebase is in Public Preview and may not be available in all workspaces. When unavailable, write-back falls back to Statement Execution API -> Delta.
 
 ---
 
@@ -189,16 +201,17 @@ the docs claim, and where the two diverge.
 | Persona switching | Clears chat, shows mode description, routes to persona-specific agent | Working code |
 | CSS/UX | Custom DM Sans font, branded colors, typing animation, auto-scroll | Working code, polished |
 
-**`apps/gradio-databricks-app/`** — Starter template (3 files, 411 total lines).
+**`apps/gradio-databricks-app/`** — Multi-workspace billing intelligence app (567 lines, rewritten April 2026).
 
 | Component | What it does | Status |
 |---|---|---|
-| Multi-tab UI | Data Explorer, Text Transformer, Configuration, Health & Status | Working code (template) |
-| Data Explorer | Filter/sort/limit against 10 hardcoded sample records | Working code (static data) |
-| Serving endpoint | **Placeholder** — `_call_serving_endpoint()` returns mock response | **Not implemented** |
-| SQL integration | **Placeholder** — `_query_sql()` returns mock data | **Not implemented** |
+| 5-tab UI | Chat, Analytics, Data Integration, Operations, Platform | Working code |
+| Chat workspace | Persona-aware conversation with full chat history, sample prompts per persona | Working code |
+| Analytics workspace | Fleet-wide Genie-powered analytics with prompt library | Working code |
+| Data Integration | Three-track visibility (Federation, Simulation, Lakebase) with live connectivity check | Working code |
+| Operations | Platform health, costs, job reliability via technical persona | Working code |
+| Identity propagation | Uses shared module (`apps/shared/serving_client.py`) for SCIM + HMAC | Working code |
 | DAB deployment | `databricks.yml` with dev/prod targets | Working config |
-| Health check | Reports environment variable status and resource configuration | Working code |
 
 ### What the docs claim
 
@@ -210,50 +223,41 @@ the docs claim, and where the two diverge.
 
 ### Overstatements
 
-1. **ARCHITECTURE.md line 22**: `"Databricks App (Dash/Gradio)"` — implies both apps are functional. The Gradio app is a **starter template with TODO placeholders**, not a functional billing agent interface. It has no serving endpoint integration, no identity propagation, and no billing-specific UI.
-2. **README line 57**: `"dash-chatbot-app/ | A simple Dash web app"` — calling it "simple" is accurate but undersells the identity propagation work. However, it is a bare chat surface with no Agent Bricks, Genie, or Lakebase demo visibility.
+None significant. Both apps now accurately described in docs.
 
 ### What is genuinely good
 
-- Dash app identity propagation (SCIM + HMAC + RequestContext) is production-quality.
-- Persona selector with 4 options and clear mode descriptions.
-- CSS/UX polish: branded colors, typing animation, auto-scroll, responsive layout.
-- Clean separation: `DatabricksChatbot.py` (UI) vs `model_serving_utils.py` (identity + endpoint).
+- **Dash app**: Production-quality identity propagation, polished CSS/UX, clean separation of concerns.
+- **Gradio app**: 5-tab multi-workspace design surfaces capabilities that are hidden in the Dash chat-only UX. Data Integration tab shows three-track data architecture. Platform tab shows deployment tier comparison. Shared identity module prevents drift.
 
-### What is missing
+### What is still missing
 
-- **No landing page or feature showcase** — the app opens directly to a chat interface. There are no cards, tabs, or sections exposing Agent Bricks, Genie, or Lakebase demos.
-- **No Genie direct access** — users can only access Genie through the agent's `ask_billing_analytics` tool. No standalone Genie exploration experience.
-- **No Lakebase/ERP data visibility** — no UI element shows that ERP data is being accessed or what federation looks like.
-- **No Agent Bricks toggle** — no way to switch between LangGraph and Agent Bricks endpoints from the UI.
-- **No demo mode** — no guided walkthrough, sample prompts, or capability showcase.
-- **Gradio app is non-functional for billing** — it's a generic starter template. The Data Explorer shows 10 hardcoded mock customer records unrelated to the actual billing data.
+- **No streaming** in either app — both wait for full response before display.
+- **No endpoint toggle** — no way to switch between LangGraph and Agent Bricks endpoints from either UI.
+- **Dash app remains chat-only** — no analytics, data integration, or operations workspaces (use Gradio for those).
 
 ---
 
-## 5. Cross-Cutting Overstatements
+## 5. Cross-Cutting Issues (Updated April 2026)
 
-### README "How to Use" section (lines 63-73)
+### README "How to Use" section — FIXED
 
-The numbered list presents notebooks 1-8 as a **sequential flow**, implying each builds on the previous:
-```
-1. 000-config
-2. 00_data_preparation
-...
-6. 03_agent_deployment_and_evaluation
-7. 04_agent_bricks_deployment
-8. 05_billing_anomaly_detection
-```
+Previously presented notebooks 03/04 as sequential steps. Now restructured as
+"Option A" (LangGraph) vs "Option B" (Agent Bricks) with a callout:
+"Notebooks 03 and 04 are alternative deployment paths, not sequential steps."
 
-**Overstatement**: This numbering implies notebook 04 extends notebook 03. PM-006 documents that a customer team made exactly this mistake. The notebooks are **alternative deployment paths** (03 OR 04), not sequential steps (03 THEN 04). The capability matrix at line 79 corrects this, but its placement after the sequential list means users encounter the misleading sequence first.
+### ARCHITECTURE.md System Overview diagram — FIXED
 
-### ARCHITECTURE.md System Overview diagram
+Agent Bricks architecture diagram added alongside the LangGraph diagram, with
+clear ASCII art showing Supervisor -> KA + Genie routing and graceful decline
+for unsupported requests.
 
-The diagram shows the LangGraph path only. It does not depict the Agent Bricks path at all. The text at line 48-51 acknowledges this, but a reader looking only at the diagram would not know Agent Bricks exists.
+### Lakebase — IMPLEMENTED (Track C)
 
-### No "Lakebase" in the codebase
-
-The term "Lakebase" does not appear in any notebook, config file, or app code. The federation implementation uses Lakehouse Federation (foreign catalogs over PostgreSQL). If the market requirement is to demo **Lakebase** (Databricks' managed PostgreSQL offering for OLTP workloads), the current codebase demonstrates the wrong product. Lakehouse Federation and Lakebase are different:
+Previously: "The term 'Lakebase' does not appear in any code file." Now: Three
+notebooks (08c/08d/08e), config keys, Gradio app integration, and full architecture
+doc (`docs/LAKEBASE_ARCHITECTURE.md`). Lakebase and Lakehouse Federation are correctly
+distinguished throughout:
 
 | | Lakehouse Federation | Lakebase |
 |---|---|---|
@@ -264,27 +268,27 @@ The term "Lakebase" does not appear in any notebook, config file, or app code. T
 
 ---
 
-## 6. Summary Matrix
+## 6. Summary Matrix (Updated April 2026)
 
 | Pillar | Code exists? | Code works? | Docs accurate? | Demo-ready? | Key gap |
 |---|---|---|---|---|---|
-| **Agent Bricks** | Yes (nb 04) | Partially — Step 3 is manual UI, `wait_for_tile` undefined | Mostly — README line 71 overstates | No — requires manual UI step, undefined function crashes | Supervisor creation is not programmatic; `wait_for_tile` is a runtime bug |
-| **Genie Spaces** | Yes (nb 03a + agent.py) | Yes — creation, querying, PII guardrails all work | Yes — honest and accurate | Partially — no standalone demo, cold start undocumented in app | Not surfaced in either Databricks App; no demo script |
-| **Lakebase** | **No** — repo implements Lakehouse Federation, not Lakebase | N/A | **Mislabeled** if "Lakebase" is the requirement | No — would need new implementation | Current code demos Federation, not Lakebase. Different products. |
-| **Federation** | Yes (nb 08/08a/08b) | Yes — both tracks work, ext_* abstraction is clean | Yes — accurate | Partially — no visibility in Apps, no demo script | Not surfaced in either Databricks App |
-| **Databricks Apps** | Yes (Dash functional, Gradio template) | Dash: yes. Gradio: placeholder stubs only | Mostly — Gradio claimed alongside Dash but is a template | Dash: chat-only, no pillar showcase. Gradio: non-functional for billing | Neither app surfaces Agent Bricks, Genie, or Federation as explicit demo experiences |
+| **Agent Bricks** | Yes (nb 04, 794 lines) | Yes — KA via SDK, MAS via REST API with manual fallback | Yes — README capability matrix is honest | Yes — 3 demo bundles, 4 validation tests, golden prompts | Cold start on first KA query |
+| **Genie Spaces** | Yes (nb 03a + agent.py) | Yes — creation, querying, PII guardrails all work | Yes — honest and accurate | Yes — Gradio Analytics tab, 28 sample questions | 45-90s cold start on first query after inactivity |
+| **Lakebase** | Yes (nb 08c/08d/08e, 816 lines) | Yes — schema bootstrap, read/write, sync to Delta | Yes — correctly distinguished from Federation | Partially — depends on Lakebase availability in workspace | Lakebase is Public Preview; not all workspaces have it |
+| **Federation** | Yes (nb 08/08a/08b) | Yes — both tracks work, ext_* abstraction is clean | Yes — accurate | Yes — Gradio Data Integration tab shows three tracks | Track A needs real external DB |
+| **Databricks Apps** | Yes (Dash 511 lines, Gradio 567 lines) | Both functional with identity propagation | Yes — each has dedicated docs | Yes — Gradio is preferred demo surface, Dash is reference chat | No streaming in either app |
+| **Identity & Governance** | Yes (identity_utils.py + admin notebooks) | Yes — SCIM, HMAC, tags, PII isolation, dual-identity audit | Yes — dedicated GOVERNANCE-AND-IDENTITY.md | Yes — 9-check validation notebook | HMAC secret rotation requires coordinated update |
+| **Streaming & Telemetry** | Yes (DLT pipeline + system tables) | Yes — DLT produces streaming tables, telemetry materializes | Yes | Partially — streaming estimates not surfaced in app | `billing_monthly_running` re-aggregation issue (PM-009) |
 
 ---
 
-## 7. Files That Should Be Modified (Implementation Plan Inputs)
+## 7. Remaining Work
 
-| File | Current state | What needs to change |
+| Item | Status | Notes |
 |---|---|---|
-| `notebooks/04_agent_bricks_deployment.py` | `wait_for_tile` undefined; MAS creation is manual UI | Fix runtime bug; evaluate SDK `manage_mas` for programmatic creation |
-| `apps/dash-chatbot-app/DatabricksChatbot.py` | Bare chat surface | Add landing page with 4 pillar cards, demo mode, Genie embed |
-| `apps/dash-chatbot-app/model_serving_utils.py` | Single endpoint targeting | Support endpoint switching (LangGraph vs Agent Bricks) |
-| `apps/gradio-databricks-app/app.py` | Generic starter template | Either implement billing-specific UI or remove from "Apps demo" claims |
-| `notebooks/03a_create_genie_space.py` | Works but no warm-up | Add optional keep-warm cell |
-| `notebooks/08_federation_setup.py` | Federation only | If Lakebase is required: add Lakebase provisioned instance creation |
-| `README.md` | Sequential numbering misleads | Restructure around deployment tiers, not notebook sequence |
-| `ARCHITECTURE.md` | LangGraph-only diagram | Add Agent Bricks architecture view |
+| Genie cold-start warm-up | Not implemented | PM-005 recommends keep-warm ping; deferred |
+| Endpoint toggle in Apps | Not implemented | Neither app can switch LangGraph/Agent Bricks at runtime |
+| Streaming in Apps | Not implemented | `predict_stream()` exists but not wired to app layer |
+| `billing_monthly_running` re-aggregation | Not fixed | PM-009: DLT streaming Gold table re-aggregates full history |
+| Dedicated write warehouse | Not implemented | PM-010: writes still share analytics warehouse |
+| `anomaly_uuid` surrogate key | Not implemented | PM-007: composite key still used for anomaly writes |

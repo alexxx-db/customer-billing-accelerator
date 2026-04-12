@@ -47,7 +47,7 @@ Execution order, dependencies, and guidance for every notebook in the accelerato
 | `00_data_preparation` | 459 | Synthetic billing data via `dbldatagen` | `customers`, `billing_items`, `billing_plans`, `invoice` Delta tables |
 | `01_create_vector_search` | 186 | FAQ vector index | `billing_faq_dataset` table, Vector Search index |
 | `02_define_uc_tools` | 656 | 14 UC functions + PII isolation + grants | UC functions, `{schema}_internal` schema, GRANT/REVOKE |
-| `03a_create_genie_space` | 215 | Genie Space with 18 tables and PII guardrails | Genie Space ID, `invoice_analytics` PII-safe view |
+| `03a_create_genie_space` | 215 | Genie Space with 20 tables and PII guardrails | Genie Space ID, `invoice_analytics` PII-safe view |
 
 ### Deployment Tier A: LangGraph Agent (Full Capability)
 

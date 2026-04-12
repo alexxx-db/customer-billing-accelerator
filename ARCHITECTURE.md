@@ -385,11 +385,14 @@ Databricks Apps.
 
 | File | Lines | Purpose |
 |---|---|---|
-| `app.py` | 334 | Gradio UI with persona-aware interface |
-| `databricks.yml` | 51 | Databricks Asset Bundle for deployment |
-| `app.yaml` | 26 | Databricks App config with resource declarations |
+| `app.py` | 567 | 5-tab billing intelligence app (Chat, Analytics, Data Integration, Operations, Platform) |
+| `../shared/serving_client.py` | 248 | Shared identity + endpoint client (used by Gradio, available to Dash) |
+| `databricks.yml` | 21 | Databricks Asset Bundle for deployment |
+| `app.yaml` | 14 | Databricks App config with serving endpoint binding |
 
-Deployed via DAB (`databricks bundle deploy`). Talks to the same Model Serving endpoint.
+The Gradio app is the preferred demo surface — it surfaces capabilities across multiple
+tabs rather than hiding everything behind a single chat box. Identity propagation uses
+the shared `serving_client.py` module. Deployed via DAB (`databricks bundle deploy`).
 
 ---
 
@@ -409,7 +412,7 @@ Deployed via DAB (`databricks bundle deploy`). Talks to the same Model Serving e
 | `02` | 656 | 14 UC functions + PII isolation + UC grants | `CREATE FUNCTION`, `REVOKE`, `GRANT` |
 | `03a` | 215 | Genie Space creation | Genie SDK `create_space` / `update_space` |
 | `03` | 746 | Agent build, MLflow eval, UC registration, serving deploy | `mlflow.langchain.log_model`, `agents.deploy` |
-| `04` | 389 | Agent Bricks Supervisor (KA + Genie) | Agent Bricks SDK |
+| `04` | 794 | Agent Bricks Supervisor (KA + Genie) — read-only tier | Agent Bricks REST API, KA SDK |
 | `05` | 291 | Anomaly detection (PySpark pipeline) | PySpark, Delta write |
 | `06` | 143 | DLT pipeline definition (not directly runnable) | `dlt.table`, `dlt.read_stream`, `@dlt.expect_or_drop` |
 | `06a` | 125 | Creates/starts DLT pipeline via SDK | `PipelinesAPI.create`, `start_update` |
@@ -500,7 +503,7 @@ notebooks/01_create_vector...   186 lines   FAQ vector search index
 notebooks/02_define_uc_tools    656 lines   14 UC functions + PII isolation + grants
 notebooks/03a_create_genie...   215 lines   Genie Space creation
 notebooks/03_agent_deploy...    746 lines   Agent build, eval, register, deploy
-notebooks/04_agent_bricks...    389 lines   Agent Bricks Supervisor deployment
+notebooks/04_agent_bricks...    794 lines   Agent Bricks Supervisor deployment
 notebooks/05_billing_anomaly    291 lines   Anomaly detection pipeline
 notebooks/06_dlt_streaming...   143 lines   DLT pipeline definition
 notebooks/06a_create_dlt...     125 lines   DLT pipeline deployment
@@ -524,16 +527,19 @@ notebooks/12a_validate_...      233 lines   Identity setup validation
 
 ### Applications (deployed as Databricks Apps)
 ```
+apps/shared/
+  serving_client.py             248 lines   Shared identity + endpoint client
+
 apps/dash-chatbot-app/
   app.py                         26 lines   Dash entry point
   DatabricksChatbot.py          261 lines   Chat UI with persona selector
-  model_serving_utils.py        216 lines   Identity context + endpoint call
-  app.yaml                        8 lines   App deployment config
+  model_serving_utils.py        216 lines   Identity context (inlined, predates shared module)
+  app.yaml                       12 lines   App deployment config
 
 apps/gradio-databricks-app/
-  app.py                        334 lines   Gradio UI
-  databricks.yml                 51 lines   DAB deployment
-  app.yaml                       26 lines   App config with resources
+  app.py                        567 lines   5-tab billing intelligence app
+  databricks.yml                 21 lines   DAB deployment
+  app.yaml                       14 lines   App config with serving endpoint
 ```
 
 ### Domain configs
@@ -545,10 +551,17 @@ notebooks/domains/utility.yaml   99 lines
 
 ### Documentation
 ```
-ARCHITECTURE.md        This file
-CHANGELOG.md           Chronological change log (July 2025 – April 2026)
-CLAUDE.md              AI assistant guidance
-DECISIONS.md           19 architecture decision records (DEC-001 through DEC-019)
-POSTMORTEM.md          12 production failure entries with resolution status
-README.md              Setup guide with capability matrix
+ARCHITECTURE.md           This file
+CHANGELOG.md              Chronological change log (July 2025 – April 2026)
+CLAUDE.md                 AI assistant guidance
+DECISIONS.md              19 architecture decision records (DEC-001 through DEC-019)
+POSTMORTEM.md             12 production failure entries with resolution status
+README.md                 Setup guide with capability matrix
+docs/TRUTH_REPORT.md      Platform pillar audit (updated April 2026)
+docs/LAKEBASE_ARCHITECTURE.md  Lakebase design and integration plan
+docs/GOVERNANCE-AND-IDENTITY.md  Identity model, UC tags, PII isolation, admin workflows
+docs/NOTEBOOK-GUIDE.md    Notebook index with execution order and dependencies
+docs/APPS-DASH.md         Dash app architecture and identity flow
+docs/APPS-GRADIO.md       Gradio app architecture and tab descriptions
+docs/ECHOSTAR-NOTES.md    EchoStar-specific evaluation and deployment guide
 ```

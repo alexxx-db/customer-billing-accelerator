@@ -182,24 +182,31 @@ if _genie_space_id:
 # concurrent sessions are negligible. TTL cleanup runs on each staging call
 # to prevent unbounded growth from abandoned tokens.
 import threading as _threading
+import contextvars as _contextvars
 
 _pending_writes: dict[str, dict] = {}
 _pending_writes_lock = _threading.Lock()
 _TOKEN_TTL_SECONDS = 600  # 10-minute expiry for unconfirmed tokens
 
-# Thread-local storage for the current request's identity context.
-# Set in predict(), read by tools during the same request.
-_request_context_local = _threading.local()
+# Per-request identity context using contextvars.
+# Unlike threading.local, ContextVar values are:
+#   - isolated per-task in async frameworks
+#   - copyable via copy_context(), so a generator snapshot stays consistent
+#     even if the parent thread moves on to a new request
+#   - never leak across requests on thread-pool reuse (each .set() is scoped)
+_request_context_var: _contextvars.ContextVar[Optional["RequestContext"]] = (
+    _contextvars.ContextVar("_request_context_var", default=None)
+)
 
 
-def _set_request_context(ctx: Optional[RequestContext]) -> None:
-    """Store the validated RequestContext for the current request thread."""
-    _request_context_local.ctx = ctx
+def _set_request_context(ctx) -> None:
+    """Store the validated RequestContext for the current request."""
+    _request_context_var.set(ctx)
 
 
-def _get_request_context() -> Optional[RequestContext]:
+def _get_request_context():
     """Retrieve the current request's RequestContext, or None."""
-    return getattr(_request_context_local, "ctx", None)
+    return _request_context_var.get()
 
 
 def _cleanup_expired_tokens() -> None:
@@ -639,7 +646,28 @@ class BillingChatAgent(ChatAgent):
                 logger.error(f"Identity error: {e}", exc_info=True)
         _set_request_context(ctx)
 
-        lc_msgs = self._to_lc_messages(messages)
+        # Snapshot the context so each generator step runs with the correct
+        # identity even if the thread is reused for a new request before
+        # this generator is fully consumed. Regular generators inherit
+        # the caller's context on each next(), so we must wrap each step
+        # in snapshot.run() to maintain isolation.
+        snapshot = _contextvars.copy_context()
+        inner = self._do_stream(self._to_lc_messages(messages), custom_inputs)
+        try:
+            while True:
+                try:
+                    yield snapshot.run(next, inner)
+                except StopIteration:
+                    return
+        except GeneratorExit:
+            inner.close()
+
+    def _do_stream(
+        self,
+        lc_msgs: list[dict],
+        custom_inputs: Optional[dict[str, Any]],
+    ) -> Generator[ChatAgentChunk, None, None]:
+        """Inner generator — each step is run inside a context snapshot by predict_stream."""
         graph = self._get_graph(custom_inputs)
         try:
             for event in graph.stream(
@@ -675,8 +703,6 @@ class BillingChatAgent(ChatAgent):
                     id=str(uuid.uuid4()),
                 )
             )
-        finally:
-            _set_request_context(None)  # Clean up thread-local
 
 
 # ── Module-level exports ────────────────────────────────────────────────────

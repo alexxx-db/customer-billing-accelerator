@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/axbo/Development/entrada/customer-billing-accelerator-latest/notebooks/mlruns/875493265673007101/2dd12e5914af4216a752ee1f2b3fdc88/artifacts
+end_time: 1788282943014
+entry_point_name: ''
+experiment_id: '875493265673007101'
+lifecycle_stage: active
+run_id: 2dd12e5914af4216a752ee1f2b3fdc88
+run_name: tool-selection-unscoped
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1788282942984
+status: 3
+tags: []
+user_id: axbo

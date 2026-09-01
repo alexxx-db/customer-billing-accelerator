@@ -1,0 +1,8 @@
+artifact_location: file:///Users/axbo/Development/entrada/customer-billing-accelerator-latest/notebooks/mlruns/875493265673007101
+creation_time: 1788282417937
+experiment_id: '875493265673007101'
+last_update_time: 1788282417937
+lifecycle_stage: active
+name: billing-agent-tool-selection
+trace_location: null
+workspace: default

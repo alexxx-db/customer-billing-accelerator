@@ -67,8 +67,8 @@ config['agent_name'] = 'ai_customer_billing_agent'
 config['VECTOR_SEARCH_ENDPOINT_NAME'] = 'vector-search-customer-billing'
 config['vector_search_index'] = 'faq_indx1'
 config['embedding_model_endpoint_name'] = 'databricks-gte-large-en'  # This is default enbedding model and needs to be updated for your environment
-config['llm_endpoint']="databricks-claude-3-7-sonnet" # This is default token based pricing endpoint and needs to be updated based on your requirement
-config['warehouse_id']="862f1d757f0424f7" # dbdemos-shared-endpoint (updated from deleted 148ccb90800933a1)
+config['llm_endpoint']="databricks-claude-sonnet-5"  # Verified present 2026-09-01. Pay-per-token endpoint; change per workspace.
+config['warehouse_id']="b50e5cec5077ea22"  # entrada_serverless_sql_databricks_warehouse, verified live 2026-09-01
 
 # Tools 
 config['tools_billing_faq'] = config['catalog']+'.'+config['database']+'.billing_faq'
@@ -131,6 +131,27 @@ config['personas'] = {}
 
 config['tools_open_disputes'] = config['catalog']+'.'+config['database']+'.lookup_open_disputes'
 config['tools_write_audit'] = config['catalog']+'.'+config['database']+'.lookup_write_audit'
+config['tools_customer_360'] = config['catalog']+'.'+config['database']+'.lookup_customer_360'
+config['tools_customer_hierarchy'] = config['catalog']+'.'+config['database']+'.lookup_customer_hierarchy'
+config['tools_pricing_drift'] = config['catalog']+'.'+config['database']+'.detect_pricing_drift'
+config['tools_pricing_history'] = config['catalog']+'.'+config['database']+'.lookup_pricing_history'
+config['tools_product_pricing'] = config['catalog']+'.'+config['database']+'.lookup_product_pricing'
+config['tools_customer_contract'] = config['catalog']+'.'+config['database']+'.lookup_customer_contract'
+config['tools_overage'] = config['catalog']+'.'+config['database']+'.detect_overage'
+config['tools_usage_history'] = config['catalog']+'.'+config['database']+'.lookup_usage_history'
+config['tools_plan_entitlement'] = config['catalog']+'.'+config['database']+'.lookup_plan_entitlement'
+config['tools_inventory_assets'] = config['catalog']+'.'+config['database']+'.lookup_inventory_assets'
+config['tools_usage_forecast'] = config['catalog']+'.'+config['database']+'.lookup_usage_forecast'
+config['tools_order_reconcile'] = config['catalog']+'.'+config['database']+'.reconcile_order_to_cash'
+config['tools_revenue_leakage'] = config['catalog']+'.'+config['database']+'.detect_revenue_leakage'
+config['tools_dso_region'] = config['catalog']+'.'+config['database']+'.lookup_dso_by_region'
+config['tools_order_lines'] = config['catalog']+'.'+config['database']+'.lookup_order_line_items'
+config['tools_pos_gap'] = config['catalog']+'.'+config['database']+'.detect_pos_reconciliation_gap'
+config['tools_store_compare'] = config['catalog']+'.'+config['database']+'.compare_stores_by_region'
+config['tools_store_profile'] = config['catalog']+'.'+config['database']+'.lookup_store_profile'
+config['tools_store_hierarchy'] = config['catalog']+'.'+config['database']+'.lookup_store_hierarchy'
+config['tools_plan_upgrade'] = config['catalog']+'.'+config['database']+'.recommend_plan_upgrade'
+config['writeback_param_mode'] = 'parameters'
 
 # UC tools — external data
 config['tools_customer_erp_profile'] = config['catalog']+'.'+config['database']+'.lookup_customer_erp_profile'

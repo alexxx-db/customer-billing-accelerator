@@ -20,12 +20,34 @@ try:
 except ImportError:
     _IDENTITY_AVAILABLE = False
     logger.warning("identity_utils not found — identity propagation disabled")
+
+# --- Write action registry ---
+try:
+    from write_actions import (
+        get_action as wa_get_action,
+        action_permitted as wa_action_permitted,
+        build_param_bag as wa_build_param_bag,
+        render as wa_render,
+        PARAM_TYPES as wa_PARAM_TYPES,
+    )
+    _WRITE_ACTIONS_AVAILABLE = True
+except ImportError:
+    _WRITE_ACTIONS_AVAILABLE = False
+    logger.error("write_actions not found — all write operations are disabled")
+
+# --- Per-turn tool scoping ---
+try:
+    from tool_domains import scope_tools as _scope_tools
+    _TOOL_SCOPING_AVAILABLE = True
+except ImportError:
+    _TOOL_SCOPING_AVAILABLE = False
+    logger.warning("tool_domains not found — every turn sees the full persona toolset")
     # Provide stub types so except clauses don't crash
     class IdentityError(Exception): pass
     class AuthorizationError(Exception): pass
     RequestContext = None  # type: ignore
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.sql import StatementState
+from databricks.sdk.service.sql import StatementParameterListItem, StatementState
 from databricks_langchain import (
     ChatDatabricks,
     VectorSearchRetrieverTool,
@@ -82,6 +104,7 @@ from pathlib import Path as _Path
 
 _PERSONA_PROMPTS: dict[str, str] = {}
 _PERSONA_TOOLS: dict[str, list[str]] = {}
+_PERSONA_WRITE_ACCESS: dict[str, str] = {}
 
 
 def _load_personas() -> None:
@@ -107,8 +130,18 @@ def _load_personas() -> None:
                     p = _yaml.safe_load(f)
                 _PERSONA_PROMPTS[name] = p.get("system_prompt", "")
                 _PERSONA_TOOLS[name] = p.get("tool_policy", {}).get("allowed_tools", [])
+                _PERSONA_WRITE_ACCESS[name] = (
+                    p.get("tool_policy", {}).get("write_access", "none")
+                )
             except Exception as e:
                 print(f"WARNING: Could not load persona {name}: {e}")
+
+    # config.yaml is always packaged with the model; personas/ may not be. Fill any
+    # gaps from the mirrored persona block so write-access enforcement survives
+    # deployment even when the directory is absent.
+    for _name, _p in (config.get("personas") or {}).items():
+        _PERSONA_TOOLS.setdefault(_name, _p.get("allowed_tools", []))
+        _PERSONA_WRITE_ACCESS.setdefault(_name, _p.get("write_access", "none"))
 
     if not _PERSONA_PROMPTS:
         _PERSONA_PROMPTS["customer_care"] = system_prompt
@@ -129,6 +162,13 @@ _uc_tool_keys = [
     'tools_operational_kpis', 'tools_job_reliability',
     'tools_customer_erp_profile', 'tools_revenue_attribution',
     'tools_finance_ops_summary', 'tools_open_disputes', 'tools_write_audit',
+    'tools_customer_360', 'tools_customer_hierarchy',
+    'tools_pricing_drift', 'tools_pricing_history',
+    'tools_product_pricing', 'tools_customer_contract',
+    'tools_overage', 'tools_usage_history', 'tools_plan_entitlement',
+    'tools_inventory_assets', 'tools_usage_forecast', 'tools_plan_upgrade',
+    'tools_order_reconcile', 'tools_revenue_leakage', 'tools_dso_region', 'tools_order_lines',
+    'tools_pos_gap', 'tools_store_compare', 'tools_store_profile', 'tools_store_hierarchy',
 ]
 _uc_function_names = [config[k] for k in _uc_tool_keys if config.get(k)]
 uc_toolkit = UCFunctionToolkit(function_names=_uc_function_names, client=client)
@@ -221,24 +261,39 @@ def _cleanup_expired_tokens() -> None:
 
 @tool
 def request_write_confirmation(
-    action: str, target_id: str, customer_id: str, reason: str = ""
+    action: str, target_id: str, customer_id: str, reason: str = "",
+    extra: str = "{}",
 ) -> str:
     """Stage a write operation for user confirmation. MUST call BEFORE any write.
     action: 'acknowledge_anomaly' | 'create_dispute' | 'update_dispute_status'
+            | 'submit_pricing_dispute' | 'apply_pricing_correction'
     target_id: anomaly or dispute ID
     customer_id: customer ID
-    reason: justification for the action"""
+    reason: justification for the action; for update_dispute_status this is the new status
+    extra: JSON object of additional values the action needs, e.g.
+           '{"event_month": "2026-07", "corrected_amount": 199.0}' for
+           apply_pricing_correction. Keys the action does not declare are ignored."""
     token = str(uuid.uuid4())[:8]
+    try:
+        extra_values = json.loads(extra) if extra else {}
+        if not isinstance(extra_values, dict):
+            return "ERROR: `extra` must be a JSON object, e.g. {\"event_month\": \"2026-07\"}."
+    except (ValueError, TypeError) as e:
+        return f"ERROR: `extra` is not valid JSON: {e}"
+
     with _pending_writes_lock:
         _cleanup_expired_tokens()
         _pending_writes[token] = dict(
             action=action, target_id=target_id,
             customer_id=customer_id, reason=reason,
+            extra=extra_values,
             ts=datetime.now(timezone.utc).isoformat(),
         )
     summary = f"Action: {action} | Target: {target_id} | Customer: {customer_id}"
     if reason:
         summary += f" | Reason: {reason}"
+    if extra_values:
+        summary += " | " + " | ".join(f"{k}: {v}" for k, v in sorted(extra_values.items()))
     return (
         f"Write operation staged (token: {token}).\n{summary}\n"
         "Please reply CONFIRM to proceed or CANCEL to abort."
@@ -286,6 +341,138 @@ def _validate_identifier(val: str, label: str) -> str:
     return cleaned
 
 
+# --- Audit record shape -----------------------------------------------------
+# Parameter names are prefixed a_ so an audit column can never collide with a
+# write action's own marker inside the shared atomic block.
+_AUDIT_COLUMNS = [
+    "audit_id", "action_type", "target_table", "target_record_id", "customer_id",
+    "agent_session_id", "executed_by", "payload_json", "result_status",
+    "result_message", "executed_at", "initiating_user", "executing_principal",
+    "persona", "request_id", "identity_degraded", "user_groups",
+]
+_AUDIT_TYPES = {
+    "a_audit_id": "STRING", "a_action_type": "STRING", "a_target_table": "STRING",
+    "a_target_record_id": "STRING", "a_customer_id": "BIGINT",
+    "a_agent_session_id": "STRING", "a_executed_by": "STRING",
+    "a_sql_statement": "STRING", "a_result_status": "STRING",
+    "a_result_message": "STRING", "a_executed_at": "TIMESTAMP",
+    "a_initiating_user": "STRING", "a_executing_principal": "STRING",
+    "a_persona": "STRING", "a_request_id": "STRING",
+    "a_identity_degraded": "BOOLEAN", "a_user_groups": "STRING",
+    "a_payload_json": "STRING",
+}
+
+
+def _audit_insert_sql(catalog_name: str, schema_name: str, with_sql: bool) -> str:
+    cols = list(_AUDIT_COLUMNS)
+    if with_sql:
+        cols.insert(8, "sql_statement")  # immediately after payload_json
+    markers = ", ".join(f":a_{c}" for c in cols)
+    return (
+        f"INSERT INTO {catalog_name}.{schema_name}.billing_write_audit "
+        f"({', '.join(cols)}) VALUES ({markers})"
+    )
+
+
+def _as_sql_params(bag: dict, types: dict) -> list:
+    """Convert a value bag into typed Statement Execution API parameters."""
+    items = []
+    for name, value in bag.items():
+        sql_type = types.get(name, "STRING")
+        if value is None:
+            rendered = None
+        elif sql_type == "BOOLEAN":
+            rendered = "true" if value else "false"
+        else:
+            rendered = str(value)
+        items.append(
+            StatementParameterListItem(name=name, value=rendered, type=sql_type)
+        )
+    return items
+
+
+def _run(statement: str, bag: dict, types: dict, mode: str, warehouse_id: str,
+         timeout: str = "30s"):
+    """Send one statement, binding values per the configured parameter mode."""
+    if mode == "parameters":
+        return _ws_client.statement_execution.execute_statement(
+            statement=statement,
+            parameters=_as_sql_params(bag, types),
+            warehouse_id=warehouse_id,
+            wait_timeout=timeout,
+        )
+    return _ws_client.statement_execution.execute_statement(
+        statement=wa_render(statement, bag, mode, types),
+        warehouse_id=warehouse_id,
+        wait_timeout=timeout,
+    )
+
+
+def _audit_denial(
+    *,
+    catalog_name: str,
+    schema_name: str,
+    warehouse_id: str,
+    param_mode: str,
+    action_name: str,
+    target_table: str,
+    op: dict,
+    persona: str,
+    message: str,
+    initiating_user: str,
+    executing_principal: str,
+    session_id: str,
+    request_id: str,
+    user_groups: str,
+) -> None:
+    """Record a write that was refused before any SQL ran.
+
+    A refused attempt is exactly what an audit log should capture — it is the
+    security-relevant event, not the successful writes. Best effort by design:
+    if this insert fails the caller still returns the refusal to the user, so a
+    logging problem can never turn a denial into a crash or, worse, into a pass.
+    """
+    if not warehouse_id or not _WRITE_ACTIONS_AVAILABLE:
+        return
+
+    # The attempt was refused, so nothing here has been validated. Coerce
+    # defensively rather than raising.
+    try:
+        customer_id = int(op.get("customer_id"))
+    except (TypeError, ValueError):
+        customer_id = None
+    target_id = str(op.get("target_id", ""))[:255]
+
+    values = {
+        "a_audit_id": str(uuid.uuid4()),
+        "a_action_type": str(action_name)[:255],
+        "a_target_table": target_table,
+        "a_target_record_id": target_id,
+        "a_customer_id": customer_id,
+        "a_agent_session_id": session_id,
+        "a_executed_by": "agent",
+        "a_payload_json": json.dumps(
+            {k: v for k, v in op.items() if k != "ts"}, default=str
+        )[:8000],
+        "a_result_status": "BLOCKED",
+        "a_result_message": message[:1000],
+        "a_executed_at": datetime.now(timezone.utc).isoformat(),
+        "a_initiating_user": initiating_user,
+        "a_executing_principal": executing_principal,
+        "a_persona": persona,
+        "a_request_id": request_id,
+        "a_identity_degraded": initiating_user == "UNKNOWN",
+        "a_user_groups": user_groups,
+    }
+    try:
+        _run(
+            _audit_insert_sql(catalog_name, schema_name, with_sql=False),
+            values, _AUDIT_TYPES, param_mode, warehouse_id, timeout="10s",
+        )
+    except Exception as e:
+        logger.error(f"Could not record BLOCKED audit for {action_name}: {e}")
+
+
 def _execute_write(
     op: dict,
     initiating_user: str = "UNKNOWN",
@@ -295,143 +482,208 @@ def _execute_write(
     persona: str = "",
     user_groups: str = "[]",
 ) -> str:
-    """Execute a write operation via Statement Execution API and log to audit."""
+    """Execute a registered write action atomically and record it in the audit log.
+
+    Sequence:
+      1. Resolve the action in the registry           — unknown action rejected
+      2. Check persona write access                   — declared level is enforced
+      3. Insert audit PENDING and verify it landed    — outside the transaction, so
+                                                        intent survives a rollback
+      4. BEGIN ATOMIC: business statements + audit SUCCESS
+      5. On failure: audit FAILED
+
+    Every PENDING row therefore resolves to exactly one outcome.
+    """
     catalog_name = config.get("catalog", "")
     schema_name = config.get("schema", config.get("database", ""))
     warehouse_id = config.get("warehouse_id", "")
+    param_mode = config.get("writeback_param_mode", "parameters")
 
     if not warehouse_id:
         return "ERROR: warehouse_id not configured. Cannot execute write operations."
+    if not _WRITE_ACTIONS_AVAILABLE:
+        return "ERROR: Write action registry unavailable. Writes are disabled."
 
-    action = op["action"]
-    target_id = op["target_id"]
-    raw_customer_id = op["customer_id"]
-    reason = op.get("reason", "")
-    now_ts = datetime.now(timezone.utc).isoformat()
-    audit_id = str(uuid.uuid4())
+    # --- 1. Resolve the action (closed allowlist — the LLM never composes SQL) ---
+    action_name = op.get("action", "")
+    action = wa_get_action(action_name)
+    persona_name = persona or DEFAULT_PERSONA
+    _denial_context = dict(
+        catalog_name=catalog_name, schema_name=schema_name,
+        warehouse_id=warehouse_id, param_mode=param_mode, op=op,
+        persona=persona_name, initiating_user=initiating_user,
+        executing_principal=executing_principal, session_id=session_id,
+        request_id=request_id, user_groups=user_groups,
+    )
 
-    # --- Input validation (C1/C2 fix) ---
+    if action is None:
+        message = f"Unknown action '{action_name}' — not in the write registry."
+        _audit_denial(action_name=action_name, target_table="UNKNOWN",
+                      message=message, **_denial_context)
+        return f"ERROR: Unknown action '{_sanitize_sql_value(action_name)}'."
+
+    # --- 2. Persona write-access gate ---
+    level = _PERSONA_WRITE_ACCESS.get(persona_name, "none")
+    if not wa_action_permitted(level, action):
+        message = (
+            f"Persona '{persona_name}' has write access '{level}', which does not "
+            f"permit '{action.action}' (requires '{action.min_write_access}')."
+        )
+        logger.warning(f"Write blocked by persona policy: {message}")
+        _audit_denial(
+            action_name=action.action,
+            target_table=",".join(
+                f"{catalog_name}.{schema_name}.{t}" for t in action.target_tables
+            ),
+            message=message, **_denial_context,
+        )
+        return (
+            f"BLOCKED: The {persona_name} persona has write access '{level}', which "
+            f"does not permit '{action.action}' (requires '{action.min_write_access}')."
+        )
+
+    # --- Input validation ---
     try:
-        customer_id_int = int(raw_customer_id)
+        customer_id_int = int(op["customer_id"])
     except (ValueError, TypeError):
-        return f"ERROR: Invalid customer_id '{raw_customer_id}'. Must be numeric."
-
-    _VALID_ACTIONS = {"acknowledge_anomaly", "create_dispute", "update_dispute_status"}
-    if action not in _VALID_ACTIONS:
-        return f"ERROR: Unknown action '{_sanitize_sql_value(action)}'."
+        return f"ERROR: Invalid customer_id '{op.get('customer_id')}'. Must be numeric."
 
     try:
-        target_id = _validate_identifier(target_id, "target_id")
+        target_id = _validate_identifier(op["target_id"], "target_id")
     except ValueError as e:
         return f"ERROR: {e}"
 
-    # Escape all string values for SQL interpolation
-    esc_reason = _sanitize_sql_value(reason)
-    esc_initiating_user = _sanitize_sql_value(initiating_user)
-    esc_executing_principal = _sanitize_sql_value(executing_principal)
-    esc_session_id = _sanitize_sql_value(session_id)
-    esc_request_id = _sanitize_sql_value(request_id)
-    esc_persona = _sanitize_sql_value(persona)
-    esc_user_groups = _sanitize_sql_value(user_groups)
-
-    # Build the SQL for the business write
-    if action == "acknowledge_anomaly":
-        sql = (
-            f"UPDATE {catalog_name}.{schema_name}.billing_anomalies "
-            f"SET acknowledged_by = 'agent', "
-            f"acknowledged_at = TIMESTAMP '{now_ts}', "
-            f"acknowledgement_reason = '{esc_reason}' "
-            f"WHERE anomaly_id = '{target_id}'"
-        )
-    elif action == "create_dispute":
-        dispute_id = f"DSP-{str(uuid.uuid4())[:8]}"
-        sql = (
-            f"INSERT INTO {catalog_name}.{schema_name}.billing_disputes "
-            f"(dispute_id, customer_id, dispute_type, status, description, "
-            f"created_by, created_at, updated_at) VALUES "
-            f"('{dispute_id}', {customer_id_int}, 'AGENT_CREATED', 'OPEN', "
-            f"'{esc_reason}', 'agent', "
-            f"TIMESTAMP '{now_ts}', TIMESTAMP '{now_ts}')"
-        )
-    elif action == "update_dispute_status":
-        sql = (
-            f"UPDATE {catalog_name}.{schema_name}.billing_disputes "
-            f"SET status = '{esc_reason}', "
-            f"updated_at = TIMESTAMP '{now_ts}' "
-            f"WHERE dispute_id = '{target_id}'"
-        )
-
+    now_ts = datetime.now(timezone.utc).isoformat()
+    audit_id = str(uuid.uuid4())
+    target_table = ",".join(
+        f"{catalog_name}.{schema_name}.{t}" for t in action.target_tables
+    )
     identity_degraded = initiating_user == "UNKNOWN"
 
-    # Audit record: PENDING
-    audit_resp = _ws_client.statement_execution.execute_statement(
-        statement=(
-            f"INSERT INTO {catalog_name}.{schema_name}.billing_write_audit "
-            f"(audit_id, action_type, target_table, target_record_id, customer_id, "
-            f"agent_session_id, executed_by, result_status, result_message, executed_at, "
-            f"initiating_user, executing_principal, persona, request_id, "
-            f"identity_degraded, user_groups) VALUES "
-            f"('{audit_id}', '{action}', "
-            f"'{catalog_name}.{schema_name}.billing_disputes', "
-            f"'{target_id}', {customer_id_int}, '{esc_session_id}', 'agent', 'PENDING', "
-            f"'Staged by confirm_write_operation', TIMESTAMP '{now_ts}', "
-            f"'{esc_initiating_user}', '{esc_executing_principal}', '{esc_persona}', "
-            f"'{esc_request_id}', {str(identity_degraded).lower()}, "
-            f"'{esc_user_groups}')"
-        ),
-        warehouse_id=warehouse_id,
-        wait_timeout="10s",
-    )
-
-    # Verify audit was recorded before executing business write (M3 fix)
-    if audit_resp.status and audit_resp.status.state != StatementState.SUCCEEDED:
-        logger.error(f"Audit PENDING insert failed — aborting write for {target_id}")
-        return f"ERROR: Could not record audit trail. Write aborted for safety."
-
-    # Execute the business write
     try:
-        resp = _ws_client.statement_execution.execute_statement(
-            statement=sql,
-            warehouse_id=warehouse_id,
-            wait_timeout="30s",
+        # Action-specific values arrive as `extra`. build_param_bag keeps only the
+        # markers this action declares and type-checks numerics, so an unexpected
+        # or malformed key cannot reach a statement.
+        bag = wa_build_param_bag(
+            action,
+            actor="agent",
+            now=now_ts,
+            target_id=target_id,
+            customer_id=customer_id_int,
+            reason=op.get("reason", ""),
+            **{k: v for k, v in (op.get("extra") or {}).items()
+               if k not in ("actor", "now", "target_id", "customer_id", "reason")},
         )
-        if resp.status.state == StatementState.SUCCEEDED:
-            result_status = "SUCCESS"
-            result_msg = f"{action} completed for {target_id} (customer {customer_id_int})."
-        else:
-            result_status = "FAILED"
-            error_detail = resp.status.error.message if resp.status.error else "Unknown error"
-            result_msg = f"{action} failed for {target_id}: {error_detail}"
-    except Exception as e:
-        result_status = "FAILED"
-        result_msg = f"{action} failed for {target_id}: {e}"
+    except KeyError as e:
+        return (
+            f"ERROR: {e}. Supply the missing values via the `extra` argument of "
+            f"request_write_confirmation."
+        )
+    except ValueError as e:
+        return f"ERROR: {e}"
 
-    # Audit record: result
-    esc_sql = _sanitize_sql_value(sql)
-    esc_result_msg = _sanitize_sql_value(result_msg)
-    _ws_client.statement_execution.execute_statement(
-        statement=(
-            f"INSERT INTO {catalog_name}.{schema_name}.billing_write_audit "
-            f"(audit_id, action_type, target_table, target_record_id, customer_id, "
-            f"agent_session_id, executed_by, sql_statement, result_status, result_message, "
-            f"executed_at, initiating_user, executing_principal, persona, request_id, "
-            f"identity_degraded, user_groups) VALUES "
-            f"('{str(uuid.uuid4())}', '{action}', "
-            f"'{catalog_name}.{schema_name}.billing_disputes', "
-            f"'{target_id}', {customer_id_int}, '{esc_session_id}', 'agent', "
-            f"'{esc_sql}', "
-            f"'{result_status}', '{esc_result_msg}', "
-            f"TIMESTAMP '{datetime.now(timezone.utc).isoformat()}', "
-            f"'{esc_initiating_user}', '{esc_executing_principal}', '{esc_persona}', "
-            f"'{esc_request_id}', {str(identity_degraded).lower()}, "
-            f"'{esc_user_groups}')"
-        ),
-        warehouse_id=warehouse_id,
-        wait_timeout="10s",
+    # For an action that creates a record, audit it under the new record's own id.
+    audit_record_id = (
+        str(bag[action.audit_record_param])
+        if action.audit_record_param else target_id
     )
 
-    prefix = "CONFIRMED" if result_status == "SUCCESS" else "FAILED"
-    return f"{prefix}: {result_msg}"
+    def _audit_values(status, message, executed_at, sql_text=None):
+        # Both rows of the two-INSERT pattern share one audit_id, so a PENDING
+        # row can always be matched to its SUCCESS or FAILED resolution.
+        values = {
+            "a_audit_id": audit_id,
+            "a_payload_json": json.dumps(bag, default=str),
+            "a_action_type": action.action,
+            "a_target_table": target_table,
+            "a_target_record_id": audit_record_id,
+            "a_customer_id": customer_id_int,
+            "a_agent_session_id": session_id,
+            "a_executed_by": "agent",
+            "a_result_status": status,
+            "a_result_message": message,
+            "a_executed_at": executed_at,
+            "a_initiating_user": initiating_user,
+            "a_executing_principal": executing_principal,
+            "a_persona": persona_name,
+            "a_request_id": request_id,
+            "a_identity_degraded": identity_degraded,
+            "a_user_groups": user_groups,
+        }
+        if sql_text is not None:
+            values["a_sql_statement"] = sql_text
+        return values
+
+    # --- 3. Audit PENDING, outside the transaction ---
+    try:
+        pending_resp = _run(
+            _audit_insert_sql(catalog_name, schema_name, with_sql=False),
+            _audit_values("PENDING", "Staged by confirm_write_operation", now_ts),
+            _AUDIT_TYPES, param_mode, warehouse_id, timeout="10s",
+        )
+    except Exception as e:
+        logger.error(f"Audit PENDING insert raised — aborting write for {target_id}: {e}")
+        return "ERROR: Could not record audit trail. Write aborted for safety."
+
+    if pending_resp.status and pending_resp.status.state != StatementState.SUCCEEDED:
+        logger.error(f"Audit PENDING insert failed — aborting write for {target_id}")
+        return "ERROR: Could not record audit trail. Write aborted for safety."
+
+    # --- 4. Business statements and audit resolution, atomically ---
+    business_sql = [
+        wa_render(s.format(catalog=catalog_name, schema=schema_name),
+                  bag, param_mode, wa_PARAM_TYPES)
+        for s in action.statements
+    ]
+    # In 'parameters' mode sql_statement records the statement *template*; the
+    # values live in the typed audit columns beside it. In 'literals' mode the
+    # rendered statement is recorded, matching pre-Phase-0 behaviour.
+    audit_success = _audit_values(
+        "SUCCESS",
+        f"{action.action} completed for {target_id} (customer {customer_id_int}).",
+        now_ts, sql_text="; ".join(business_sql),
+    )
+    atomic_bag = {**bag, **audit_success}
+    atomic_types = {**wa_PARAM_TYPES, **_AUDIT_TYPES}
+
+    body = ";\n  ".join(
+        business_sql
+        + [wa_render(_audit_insert_sql(catalog_name, schema_name, with_sql=True),
+                     audit_success, param_mode, _AUDIT_TYPES)]
+    )
+    atomic_stmt = f"BEGIN ATOMIC\n  {body};\nEND"
+
+    try:
+        resp = _run(atomic_stmt, atomic_bag, atomic_types, param_mode, warehouse_id)
+        if resp.status and resp.status.state == StatementState.SUCCEEDED:
+            return (
+                f"{action.action} completed for {target_id} "
+                f"(customer {customer_id_int}). Audit id {audit_id}."
+            )
+        error_detail = (
+            resp.status.error.message
+            if resp.status and resp.status.error else "Unknown error"
+        )
+        result_msg = f"{action.action} failed for {target_id}: {error_detail}"
+    except Exception as e:
+        result_msg = f"{action.action} failed for {target_id}: {e}"
+
+    # --- 5. Nothing was written. Resolve the PENDING row to FAILED. ---
+    logger.warning(f"Write transaction rolled back: {result_msg}")
+    try:
+        _run(
+            _audit_insert_sql(catalog_name, schema_name, with_sql=True),
+            _audit_values(
+                "FAILED", result_msg,
+                datetime.now(timezone.utc).isoformat(),
+                sql_text="; ".join(business_sql),
+            ),
+            _AUDIT_TYPES, param_mode, warehouse_id, timeout="10s",
+        )
+    except Exception as e:
+        logger.error(f"Could not record FAILED audit for {target_id}: {e}")
+
+    return result_msg
 
 
 @tool
@@ -546,16 +798,44 @@ class BillingChatAgent(ChatAgent):
     def __init__(self):
         # No default graph with all tools.
         # Persona-specific graphs are built on first use.
-        self._persona_graphs: dict[str, CompiledStateGraph] = {}
+        # Keyed on (persona, frozenset(tool names)) — see _get_graph.
+        self._persona_graphs: dict[tuple, CompiledStateGraph] = {}
 
-    def _get_graph(self, custom_inputs: Optional[dict[str, Any]] = None) -> CompiledStateGraph:
-        """Return a compiled graph for the requested persona."""
+    def _get_graph(
+        self,
+        custom_inputs: Optional[dict[str, Any]] = None,
+        messages: Optional[list] = None,
+    ) -> CompiledStateGraph:
+        """Return a compiled graph scoped to this persona and this turn's topic.
+
+        Persona filters by who is asking; the intent router filters by what they
+        asked about. The router is permissive — when it cannot classify a turn it
+        returns the full persona set, so scoping can narrow but never blank out.
+
+        Graphs are cached on (persona, tool set). The number of distinct tool sets
+        is bounded by the domain combinations that actually occur, which in
+        practice is a handful.
+        """
         persona = (custom_inputs or {}).get("persona", DEFAULT_PERSONA)
-        if persona not in self._persona_graphs:
-            persona_tools = _filter_tools_for_persona(persona)
+        persona_tools = _filter_tools_for_persona(persona)
+
+        matched: set = set()
+        if _TOOL_SCOPING_AVAILABLE and messages:
+            available = {t.name for t in persona_tools}
+            scoped_names, matched = _scope_tools(messages, available)
+            if matched:
+                persona_tools = [t for t in persona_tools if t.name in scoped_names]
+
+        key = (persona, frozenset(t.name for t in persona_tools))
+        if key not in self._persona_graphs:
             persona_prompt = _PERSONA_PROMPTS.get(persona, system_prompt)
-            self._persona_graphs[persona] = _build_graph(llm, persona_tools, persona_prompt)
-        return self._persona_graphs[persona]
+            self._persona_graphs[key] = _build_graph(llm, persona_tools, persona_prompt)
+            if matched:
+                logger.info(
+                    f"Tool scope: persona={persona} domains={sorted(matched)} "
+                    f"tools={len(persona_tools)}"
+                )
+        return self._persona_graphs[key]
 
     @staticmethod
     def _to_lc_messages(messages):
@@ -597,7 +877,7 @@ class BillingChatAgent(ChatAgent):
         _set_request_context(ctx)
 
         lc_msgs = self._to_lc_messages(messages)
-        graph = self._get_graph(custom_inputs)
+        graph = self._get_graph(custom_inputs, lc_msgs)
         try:
             result = graph.invoke({"messages": lc_msgs})
             last = result["messages"][-1]
@@ -668,7 +948,7 @@ class BillingChatAgent(ChatAgent):
         custom_inputs: Optional[dict[str, Any]],
     ) -> Generator[ChatAgentChunk, None, None]:
         """Inner generator — each step is run inside a context snapshot by predict_stream."""
-        graph = self._get_graph(custom_inputs)
+        graph = self._get_graph(custom_inputs, lc_msgs)
         try:
             for event in graph.stream(
                 {"messages": lc_msgs}, stream_mode="updates"

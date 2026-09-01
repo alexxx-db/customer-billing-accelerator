@@ -122,6 +122,38 @@ for col_name, col_type, comment in [
 
 # COMMAND ----------
 
+# DBTITLE 1,Enable catalog commits on every write target
+# The agent runs a write action's statements and its audit resolution row inside
+# one BEGIN ATOMIC block. That is refused on any table without the
+# `catalogManaged` feature:
+#   [TRANSACTION_NOT_SUPPORTED.WRITE_NON_CATALOG_MANAGED_TABLE]
+# Verified against a live warehouse by spike0_atomic_params.py. Safe to re-run,
+# and safe on tables that already hold data — the upgrade is in place.
+#
+# The table list comes from the write action registry, so adding an action for a
+# new demo extends this automatically.
+import sys as _sys
+_sys.path.insert(0, ".")
+from write_actions import catalog_managed_ddl
+
+# A write target may legitimately not exist yet: this notebook runs before the
+# demo notebooks that create some of them. Those create their tables already
+# catalog-managed, so a missing table here is expected, not a failure.
+for _ddl in catalog_managed_ddl(catalog, schema):
+    _table = _ddl.split()[2]
+    if not spark.catalog.tableExists(_table):
+        print(f"  not yet created, skipping: {_table}")
+        print(f"     (created catalog-managed by a later notebook)")
+        continue
+    try:
+        spark.sql(_ddl)
+        print(f"  catalog commits enabled: {_table}")
+    except Exception as e:
+        print(f"  FAILED to enable catalog commits on {_table}: {e}")
+        print("   -> writes to this table will fail with TRANSACTION_NOT_SUPPORTED")
+
+# COMMAND ----------
+
 # DBTITLE 1,Validation
 for tbl in ["billing_anomalies", "billing_disputes", "billing_write_audit"]:
     try:
@@ -129,5 +161,23 @@ for tbl in ["billing_anomalies", "billing_disputes", "billing_write_audit"]:
         print(f"  {tbl}: {count} existing rows")
     except Exception as e:
         print(f"  {tbl}: ERROR — {e}")
+
+# Confirm the feature actually landed — a write path silently missing this
+# fails only at the moment a user confirms a write.
+print("\nCatalog commits status:")
+from write_actions import write_target_tables
+
+for tbl in sorted(write_target_tables()):
+    fq = f"{catalog}.{schema}.{tbl}"
+    if not spark.catalog.tableExists(fq):
+        print(f"  {tbl}: not yet created")
+        continue
+    try:
+        props = {r["key"]: r["value"] for r in
+                 spark.sql(f"SHOW TBLPROPERTIES {fq}").collect()}
+        print(f"  {tbl}: delta.feature.catalogManaged = "
+              f"{props.get('delta.feature.catalogManaged', 'ABSENT')}")
+    except Exception as e:
+        print(f"  {tbl}: could not read properties — {e}")
 
 print("\nWrite-back infrastructure setup complete.")

@@ -638,6 +638,8 @@ with mlflow.start_run():
     logged_agent_info = mlflow.pyfunc.log_model(
         name=config['agent_name'],
         python_model="agent.py",
+        code_paths=["identity_utils.py", "write_actions.py", "tool_domains.py",
+                    "personas"],
         model_config='config.yaml',
         input_example=input_example,
         resources=resources,

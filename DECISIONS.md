@@ -96,6 +96,32 @@ instead of routing to nonexistent tools (fixed April 2026).
 
 ---
 
+### Amendment, 2026-09-01 — the Agent Bricks constraint no longer holds
+
+This ADR states that Agent Bricks "supports only KA and Genie sub-agents — no
+custom tools, no write-back, no UC function binding." That was true when written
+and is now out of date.
+
+Supervisor Agent is GA and coordinates Genie agents, **agent endpoints, Unity
+Catalog functions, MCP servers and custom agents**. UC functions require the
+Managed MCP Servers preview to be enabled.
+See https://docs.databricks.com/aws/en/agents/agent-bricks/multi-agent-supervisor
+
+What has **not** changed is the reason the write path stays in LangGraph. The
+write tools are stateful custom Python — an in-process staged-token store with a
+TTL, plus identity taken from `predict()`. They cannot be UC functions, because a
+UC function body is a query expression and cannot write (see the Phase 0 work in
+`docs/ORDM-DEMO-PLAN.md`). They can only live inside an agent endpoint. So a
+supervisor design keeps writes inside one agent rather than at the routing layer.
+
+The decision to keep LangGraph as the primary path therefore still stands, but on
+narrower grounds than this ADR originally gave: write-path statefulness, not a
+blanket lack of tool binding.
+
+Before adopting a managed supervisor, verify that `custom_inputs` — the channel
+carrying the signed RequestContext — survives the supervisor hop. That is
+untested.
+
 ## DEC-003: Write-Back via Statement Execution API With Two-INSERT Audit Pattern
 
 **Status:** Decided

@@ -44,6 +44,26 @@ tool_policy:
     - lookup_billing_anomalies
     - lookup_billing
     - lookup_customer
+    - lookup_customer_360
+    - lookup_customer_hierarchy
+    - detect_pricing_drift
+    - lookup_pricing_history
+    - lookup_product_pricing
+    - lookup_customer_contract
+    - detect_overage
+    - lookup_usage_history
+    - lookup_plan_entitlement
+    - lookup_inventory_assets
+    - lookup_usage_forecast
+    - reconcile_order_to_cash
+    - detect_revenue_leakage
+    - lookup_dso_by_region
+    - lookup_order_line_items
+    - detect_pos_reconciliation_gap
+    - compare_stores_by_region
+    - lookup_store_profile
+    - lookup_store_hierarchy
+    - recommend_plan_upgrade
     - lookup_revenue_attribution
     - lookup_customer_erp_profile
     - request_write_confirmation

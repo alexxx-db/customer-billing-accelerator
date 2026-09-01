@@ -38,6 +38,20 @@ tool_policy:
     - lookup_billing_items
     - lookup_billing_plans
     - lookup_customer
+    - lookup_customer_360
+    - lookup_customer_hierarchy
+    - detect_pricing_drift
+    - lookup_pricing_history
+    - lookup_product_pricing
+    - lookup_customer_contract
+    - detect_overage
+    - lookup_usage_history
+    - lookup_plan_entitlement
+    - lookup_inventory_assets
+    - lookup_usage_forecast
+    - reconcile_order_to_cash
+    - lookup_order_line_items
+    - recommend_plan_upgrade
     - lookup_billing_anomalies
     - lookup_dispute_history
     - lookup_customer_erp_profile

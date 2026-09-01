@@ -1,8 +1,15 @@
 catalog: alexxx
 schema: customer_billing_accelerator
-llm_endpoint: databricks-claude-3-7-sonnet
+# Verified live 2026-09-01 with a tool-calling round trip.
+# databricks-claude-3-7-sonnet is absent from this workspace and
+# databricks-claude-sonnet-4 is deprecated (endpoint returns BAD_REQUEST).
+llm_endpoint: databricks-claude-sonnet-5
 embedding_model_endpoint_name: databricks-gte-large-en
-warehouse_id: 148ccb90800933a1
+# Verified live 2026-09-01: entrada_serverless_sql_databricks_warehouse.
+# The two ids previously here (148ccb90800933a1, and 862f1d757f0424f7 in
+# 000-config.py) do not exist in this workspace. Set this per target workspace;
+# spike0_atomic_params.py preflights it and lists valid ids.
+warehouse_id: b50e5cec5077ea22
 vector_search_index: alexxx.customer_billing_accelerator.faq_indx1
 tools_billing_faq: alexxx.customer_billing_accelerator.billing_faq
 tools_billing: alexxx.customer_billing_accelerator.lookup_billing
@@ -18,6 +25,31 @@ tools_revenue_attribution: alexxx.customer_billing_accelerator.lookup_revenue_at
 tools_finance_ops_summary: alexxx.customer_billing_accelerator.get_finance_operations_summary
 tools_open_disputes: alexxx.customer_billing_accelerator.lookup_open_disputes
 tools_write_audit: alexxx.customer_billing_accelerator.lookup_write_audit
+tools_customer_360: alexxx.customer_billing_accelerator.lookup_customer_360
+tools_customer_hierarchy: alexxx.customer_billing_accelerator.lookup_customer_hierarchy
+tools_pricing_drift: alexxx.customer_billing_accelerator.detect_pricing_drift
+tools_pricing_history: alexxx.customer_billing_accelerator.lookup_pricing_history
+tools_product_pricing: alexxx.customer_billing_accelerator.lookup_product_pricing
+tools_customer_contract: alexxx.customer_billing_accelerator.lookup_customer_contract
+tools_overage: alexxx.customer_billing_accelerator.detect_overage
+tools_usage_history: alexxx.customer_billing_accelerator.lookup_usage_history
+tools_plan_entitlement: alexxx.customer_billing_accelerator.lookup_plan_entitlement
+tools_inventory_assets: alexxx.customer_billing_accelerator.lookup_inventory_assets
+tools_usage_forecast: alexxx.customer_billing_accelerator.lookup_usage_forecast
+tools_order_reconcile: alexxx.customer_billing_accelerator.reconcile_order_to_cash
+tools_revenue_leakage: alexxx.customer_billing_accelerator.detect_revenue_leakage
+tools_dso_region: alexxx.customer_billing_accelerator.lookup_dso_by_region
+tools_order_lines: alexxx.customer_billing_accelerator.lookup_order_line_items
+tools_pos_gap: alexxx.customer_billing_accelerator.detect_pos_reconciliation_gap
+tools_store_compare: alexxx.customer_billing_accelerator.compare_stores_by_region
+tools_store_profile: alexxx.customer_billing_accelerator.lookup_store_profile
+tools_store_hierarchy: alexxx.customer_billing_accelerator.lookup_store_hierarchy
+tools_plan_upgrade: alexxx.customer_billing_accelerator.recommend_plan_upgrade
+# Write-back SQL parameter binding. Spike 0 confirmed on 2026-08-31 that typed
+# parameter markers DO bind inside BEGIN ATOMIC, so 'parameters' is correct.
+# 'literals' (escaped interpolation) remains available as a fallback.
+# Re-run spike0_atomic_params.py before deploying to a new workspace.
+writeback_param_mode: parameters
 agent_name: ai_customer_billing_agent
 genie_space_id: ''
 agent_prompt: "You are a Billing Support Agent assisting users with billing inquiries.\n\
@@ -106,6 +138,20 @@ personas:
     - lookup_billing_items
     - lookup_billing_plans
     - lookup_customer
+    - lookup_customer_360
+    - lookup_customer_hierarchy
+    - detect_pricing_drift
+    - lookup_pricing_history
+    - lookup_product_pricing
+    - lookup_customer_contract
+    - detect_overage
+    - lookup_usage_history
+    - lookup_plan_entitlement
+    - lookup_inventory_assets
+    - lookup_usage_forecast
+    - reconcile_order_to_cash
+    - lookup_order_line_items
+    - recommend_plan_upgrade
     - lookup_billing_anomalies
     - lookup_dispute_history
     - lookup_customer_erp_profile
@@ -134,6 +180,26 @@ personas:
     - lookup_billing_anomalies
     - lookup_billing
     - lookup_customer
+    - lookup_customer_360
+    - lookup_customer_hierarchy
+    - detect_pricing_drift
+    - lookup_pricing_history
+    - lookup_product_pricing
+    - lookup_customer_contract
+    - detect_overage
+    - lookup_usage_history
+    - lookup_plan_entitlement
+    - lookup_inventory_assets
+    - lookup_usage_forecast
+    - reconcile_order_to_cash
+    - detect_revenue_leakage
+    - lookup_dso_by_region
+    - lookup_order_line_items
+    - detect_pos_reconciliation_gap
+    - compare_stores_by_region
+    - lookup_store_profile
+    - lookup_store_hierarchy
+    - recommend_plan_upgrade
     - lookup_revenue_attribution
     - lookup_customer_erp_profile
     - request_write_confirmation
